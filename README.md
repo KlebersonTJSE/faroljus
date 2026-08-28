@@ -189,7 +189,7 @@ Tribunal de Justiça do Estado de Sergipe (TJSE)
 
 ## 📜 Licença
 
-Este projeto está licenciado sob os termos da licença MIT.
+O FarolJus é disponibilizado sob a Licença MIT por entendermos que soluções voltadas ao aprimoramento da gestão pública devem incentivar a colaboração, a transparência e o compartilhamento de conhecimento entre as instituições. A adoção dessa licença permite que outros órgãos do Poder Judiciário utilizem, adaptem e aprimorem a ferramenta livremente, preservando o devido reconhecimento aos seus autores e contribuindo para a evolução contínua da qualidade das informações prestadas ao Conselho Nacional de Justiça (CNJ).
 
 Consulte o arquivo `LICENSE`.
 
