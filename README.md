@@ -1,29 +1,30 @@
 ---
-title: "FarolJus"
+title: ""
 output: github_document
 ---
 
-# 🚨 FarolJus
+<img src="img/logo_faroljus.png" width="250r">
 
-### Orientação segura para a conformidade no MPM.
+### Sistema de análise de erros, alertas e inconsistências do MPM/CNJ.
+
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSEg.shields.io/badge/R-%.3-blue](https://www.r-project.org/)
+
 [![Shiny](https://img.shields.io/badge/Shiny-Web%20App-lightblue)](https://shiny.[![Status](https://img.shields.io/badge/Status-Emvimento-yellow]()
-[![Last Commit](https://img.shields.io/github/last-commit/SEU-USUARIO/FarolJus)](https://github.com/SEU-USUARIO/Fp align="center">
-  <img src="img/logo_faroljus.png" width="250r">
-<b>Sistema de análise de erros, alertas e inconsistências do MPM/CNJ</b>
-</p>
+
+[![Last Commit](https://img.shields.io/github/last-commit/KlebersonTJSE/FarolJus)](https://github.com/KlebersonTJSE/Fp align="center">
 
 ---
 
 ## 📖 Sobre o Projeto
 
+<div style="text-align: justify;">
 O **FarolJus** é uma aplicação desenvolvida para apoiar órgãos do Poder Judiciário na análise de relatórios de erros, alertas e inconsistências gerados pelo **Modelo de Pontuação da Magistratura (MPM)** do Conselho Nacional de Justiça (CNJ).
 
 Seu propósito é fornecer uma visão consolidada dos apontamentos do MPM, permitindo a rápida identificação de problemas, priorização de correções e monitoramento da conformidade das informações encaminhadas ao CNJ.
 
 O nome **FarolJus** representa a missão da ferramenta: iluminar inconsistências e orientar os tribunais na melhoria contínua da qualidade dos dados institucionais.
-
+</div>
 ---
 
 ## 🎯 Objetivos
@@ -169,15 +170,16 @@ O FarolJus foi concebido para fortalecer a qualidade das informações encaminha
 
 ## 👨‍💻 Desenvolvedores
 
-### Kleberson Carlos Pinto
-
-**Técnico Judiciário - Programação de Sistemas**  
-Tribunal de Justiça do Estado de Sergipe (TJSE)
-
 ### Edison Carvalho
 
 **Técnico Judiciário - Programação de Sistemas**  
 Tribunal de Justiça do Estado de Sergipe (TJSE)
+
+### Kleberson Carlos Pinto
+
+**Técnico Judiciário - Programação de Sistemas**  
+Tribunal de Justiça do Estado de Sergipe (TJSE)
+🔗 LinkedIn: [Kleberson Carlos Pinto](https://www.linkedin.com/in/kleberson-pinto-91010a345/)
 
 ---
 
@@ -189,10 +191,11 @@ Tribunal de Justiça do Estado de Sergipe (TJSE)
 
 ## 📜 Licença
 
+<div style="text-align: justify;">
 O FarolJus é disponibilizado sob a Licença MIT por entendermos que soluções voltadas ao aprimoramento da gestão pública devem incentivar a colaboração, a transparência e o compartilhamento de conhecimento entre as instituições. A adoção dessa licença permite que outros órgãos do Poder Judiciário utilizem, adaptem e aprimorem a ferramenta livremente, preservando o devido reconhecimento aos seus autores e contribuindo para a evolução contínua da qualidade das informações prestadas ao Conselho Nacional de Justiça (CNJ).
 
 Consulte o arquivo `LICENSE`.
-
+</div>
 ---
 
 ## 🤝 Contribuição
