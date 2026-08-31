@@ -1,7 +1,3 @@
----
-title: ""
-output: github_document
----
 
 <img src="img/logo_faroljus.png" width="250r">
 
