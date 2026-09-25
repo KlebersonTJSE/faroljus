@@ -1,0 +1,7 @@
+database:
+  driver_class: "com.intersystems.jdbc.IRISDriver"
+  jar_path: "C:/Program Files/DBeaver/intersystems-jdbc-3.10.3.jar"
+  url: "jdbc:IRIS://172.17.3.41:51773/TJSE"
+  user: "USUARIO_BANCO"
+  password: "SENHA_BANCO"
+``

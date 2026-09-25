@@ -1,0 +1,36 @@
+---
+    title: "Relatório de Ocorrências eSocial"
+output:
+    html_document:
+    theme: flatly
+toc: false
+params:
+    tabela: NULL
+---
+
+    ```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+    echo = FALSE,
+    warning = FALSE,
+    message = FALSE
+)
+
+library(knitr)
+```
+
+# Informações
+
+Data de geração: `r format(Sys.time(), "%d/%m/%Y %H:%M")`
+
+Quantidade de registros:
+
+    **`r nrow(params$tabela)`**
+
+    # Registros
+
+    ```{r}
+kable(
+    params$tabela,
+    format = "html"
+)
+```

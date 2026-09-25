@@ -1,0 +1,97 @@
+---
+title: "DECLARAÇÃO DE VÍNCULO FUNCIONAL, TEMPO DE SERVIÇO E CONTRIBUIÇÃO PREVIDENCIÁRIA"
+author: "Pinto, Kleberson"
+date: "2026-07-10"
+# output: pdf_document
+output: html_document
+
+params:
+  nome: ""
+  matricula: ""
+  cpf: ""
+  cargo: ""
+  lotacao: ""
+  data_ingresso: ""
+  tempo_vinculo: ""
+  tempo_servico_publico: ""
+  tempo_contribuicao: ""
+  regime_previdenciario: ""
+  valor_contribuicao: ""
+---
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  text-align: justify;
+  line-height: 1.5;
+  font-size: 12pt;
+}
+
+h1 {
+  text-align: center;
+  font-size: 16pt;
+}
+
+.dados {
+  margin-top: 20px;
+  margin-bottom: 20px;
+}
+
+.rodape {
+  margin-top: 40px;
+  font-size: 10pt;
+}
+</style>
+
+```{r setup, include=FALSE}
+Sys.setlocale("LC_TIME", "pt_BR.UTF-8")
+
+data_emissao <- format(Sys.time(),
+                       "%d/%m/%Y às %H:%M:%S")
+```
+
+# DECLARAÇÃO DE VÍNCULO FUNCIONAL, TEMPO DE SERVIÇO E CONTRIBUIÇÃO PREVIDENCIÁRIA
+
+O **MINISTÉRIO PÚBLICO DO ESTADO DE RONDÔNIA – MPRO**, por intermédio da unidade competente de Gestão de Pessoas, declara que:
+
+<div class="dados">
+
+**Nome:** `r params$nome`  
+
+**Matrícula:** `r params$matricula`  
+
+**CPF:** `r params$cpf`  
+
+**Cargo:** `r params$cargo`  
+
+**Lotação:** `r params$lotacao`  
+
+**Data de Ingresso no MPRO:** `r params$data_ingresso`
+
+</div>
+
+mantém vínculo funcional com este Ministério Público, na condição de servidor(a) público(a), ocupante do cargo acima especificado.
+
+Com base nos registros funcionais e previdenciários constantes nos sistemas corporativos desta Instituição, informa-se que o(a) referido(a) servidor(a) possui:
+
+- **Tempo de vínculo com o MPRO:** `r params$tempo_vinculo`;
+- **Tempo de efetivo serviço público:** `r params$tempo_servico_publico`;
+- **Tempo total de contribuição previdenciária reconhecido até a presente data:** `r params$tempo_contribuicao`;
+- **Regime Previdenciário:** `r params$regime_previdenciario`;
+- **Valor total das contribuições previdenciárias registradas em nome do(a) servidor(a) até a data de emissão desta declaração:** **R$ `r params$valor_contribuicao`**.
+
+As informações acima refletem os dados disponíveis nos sistemas e assentamentos funcionais deste Ministério Público na data e hora de emissão deste documento, podendo sofrer alterações em decorrência de atualizações cadastrais, averbações, revisões administrativas ou registros supervenientes.
+
+A presente declaração é emitida eletronicamente, mediante solicitação do(a) interessado(a), para fins de comprovação de vínculo funcional, tempo de serviço e situação previdenciária, produzindo seus efeitos exclusivamente para a finalidade a que se destina.
+
+## Proteção de Dados Pessoais
+
+Este documento contém dados pessoais e informações funcionais protegidas pela **Lei Federal nº 13.709/2018 (Lei Geral de Proteção de Dados Pessoais – LGPD)**. Sua utilização deve observar os princípios da finalidade, adequação, necessidade e segurança previstos na legislação vigente, sendo vedada sua divulgação, compartilhamento ou tratamento para finalidades incompatíveis com aquelas que justificaram sua emissão, salvo autorização legal ou judicial.
+
+**Porto Velho/RO, `r data_emissao`.**
+
+<div class="rodape">
+
+Documento gerado eletronicamente por meio dos sistemas do Ministério Público do Estado de Rondônia (MPRO), dispensada assinatura manuscrita, nos termos da legislação aplicável e das normas internas vigentes.
+
+</div>
