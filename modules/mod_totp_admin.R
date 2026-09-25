@@ -134,11 +134,47 @@ mod_totp_admin_ui <- function(id) {
                 p(
                     class = "text-muted",
                     style = "font-size: 13px; margin-top: 10px;",
-                    "Use o controle deslizante abaixo para escolher a data ",
-                    "inicial e final do período considerado nos gráficos."
+                    "Informe a data inicial e a data final do período ",
+                    "considerado (digitando no formato dd/mm/aaaa ou ",
+                    "escolhendo no calendário). Se uma ou as duas datas ",
+                    "estiverem em branco, é considerado todo o histórico ",
+                    "gravado no banco. O período também vale para a aba ",
+                    "\"Auditoria - Tabela\"."
                 ),
                 
-                uiOutput(ns("slider_periodo_grafico_ui")),
+                # O calendário (bootstrap-datepicker) abre dentro da janela
+                # modal "Administração" — garante que ele fique por cima
+                # dela, e não escondido atrás.
+                tags$style(HTML(".datepicker.dropdown-menu { z-index: 2000 !important; }")),
+                
+                # value = NA → caixa começa em branco (value = NULL
+                # preencheria com a data de hoje).
+                fluidRow(
+                    column(
+                        3,
+                        dateInput(
+                            ns("data_inicio_auditoria"),
+                            "Data inicial",
+                            value = NA,
+                            format = "dd/mm/yyyy",
+                            language = "pt-BR",
+                            weekstart = 0,
+                            width = "100%"
+                        )
+                    ),
+                    column(
+                        3,
+                        dateInput(
+                            ns("data_fim_auditoria"),
+                            "Data final",
+                            value = NA,
+                            format = "dd/mm/yyyy",
+                            language = "pt-BR",
+                            weekstart = 0,
+                            width = "100%"
+                        )
+                    )
+                ),
                 
                 fluidRow(
                     column(
@@ -334,16 +370,14 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
         # ---------------------------------------------------------------
         # AUDITORIA DE LOGIN
         # -----------------------------------------------------------------
-        # O período considerado vem do controle deslizante (definido na
-        # aba "Auditoria - Gráfico") SÓ quando o filtro está ativado
-        # (input$usar_filtro_periodo); caso contrário, usa todo o
-        # histórico gravado no banco. Isso é o que faz a aba
-        # "Auditoria - Tabela" mostrar dados assim que a pessoa loga, sem
-        # precisar visitar a aba "Auditoria - Gráfico" antes: como o
-        # slider é um uiOutput de uma aba escondida, o Shiny suspende sua
-        # renderização (e não define input$periodo_grafico) enquanto ela
-        # não for visitada — então, por padrão (filtro desativado), a
-        # consulta abaixo nunca depende dele.
+        # O período considerado vem das caixas "Data inicial" e "Data
+        # final" (aba "Auditoria - Gráfico") SÓ quando as duas estão
+        # preenchidas com uma data válida; se uma ou as duas estiverem em
+        # branco (ou com texto que não é data), usa todo o histórico
+        # gravado no banco. As caixas ficam direto na UI (não em um
+        # uiOutput), então existem desde a abertura da janela — a aba
+        # "Auditoria - Tabela" mostra dados logo de início, sem precisar
+        # visitar a aba "Auditoria - Gráfico" antes.
         #
         # Cada acesso é classificado em Manhã (06h–11h59), Tarde
         # (12h–17h59) ou Noite (demais horários, cobrindo a madrugada
@@ -357,8 +391,8 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
         }
         
         # Menor/maior data já registrada em login_auditoria — consulta
-        # leve, usada tanto para dimensionar o slider quanto como período
-        # padrão quando o filtro está desativado.
+        # leve, usada como período padrão (todo o histórico) quando uma
+        # ou as duas caixas de data estão em branco.
         intervaloAuditoria <- reactive({
             req(ativo())
             
@@ -369,38 +403,42 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
             intervalo
         })
         
-        output$slider_periodo_grafico_ui <- renderUI({
-            
-            intervalo <- intervaloAuditoria()
-            req(nrow(intervalo) > 0, !is.na(intervalo$minimo[1]))
-            
-            data_min_real <- as.Date(intervalo$minimo[1])
-            data_max_real <- as.Date(intervalo$maximo[1])
-            
-            # O slider sempre cobre pelo menos 180 dias, mesmo que o
-            # histórico gravado seja mais curto que isso.
-            data_min_slider <- min(data_min_real, data_max_real - 180)
-            
-            tagList(
-                checkboxInput(
-                    ns("usar_filtro_periodo"),
-                    "Usar filtro de período (caso desmarcado, considera todo o histórico gravado no banco)",
-                    value = FALSE
-                ),
-                sliderInput(
-                    ns("periodo_grafico"),
-                    "Data inicial e final",
-                    min = data_min_slider,
-                    max = data_max_real,
-                    value = c(max(data_min_slider, data_max_real - 180), data_max_real),
-                    timeFormat = "%d/%m/%Y"
-                )
-            )
-        })
+        # Converte o valor de um dateInput em Date, ou NULL quando a caixa
+        # está em branco / com valor inválido.
+        data_ou_null <- function(x) {
+            if (is.null(x) || length(x) == 0) {
+                return(NULL)
+            }
+            x <- suppressWarnings(as.Date(x[1]))
+            if (is.na(x)) NULL else x
+        }
         
-        # Dados do período considerado (filtro ativo → slider; filtro
-        # inativo → todo o histórico) — buscados direto do banco já
-        # filtrados por data (ver listar_auditoria_login()).
+        # Período escolhido nas caixas de data: list(inicio, fim) quando as
+        # duas estão preenchidas, ou NULL (= todo o histórico). Se a data
+        # inicial vier depois da final, as duas são invertidas.
+        #
+        # debounce(): enquanto a pessoa digita a data, o valor muda a cada
+        # tecla — espera 600 ms sem mudanças antes de consultar o banco.
+        periodoEscolhido <- debounce(reactive({
+            
+            inicio <- data_ou_null(input$data_inicio_auditoria)
+            fim <- data_ou_null(input$data_fim_auditoria)
+            
+            if (is.null(inicio) || is.null(fim)) {
+                return(NULL)
+            }
+            
+            if (inicio > fim) {
+                return(list(inicio = fim, fim = inicio, invertido = TRUE))
+            }
+            
+            list(inicio = inicio, fim = fim, invertido = FALSE)
+            
+        }), 600)
+        
+        # Dados do período considerado (as duas datas preenchidas → esse
+        # período; alguma em branco → todo o histórico) — buscados direto
+        # do banco já filtrados por data (ver listar_auditoria_login()).
         dadosAuditoriaPeriodo <- reactive({
             
             req(ativo())
@@ -408,10 +446,11 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
             intervalo <- intervaloAuditoria()
             req(nrow(intervalo) > 0, !is.na(intervalo$minimo[1]))
             
-            if (isTRUE(input$usar_filtro_periodo)) {
-                req(input$periodo_grafico)
-                data_inicio <- input$periodo_grafico[1]
-                data_fim <- input$periodo_grafico[2]
+            periodo <- periodoEscolhido()
+            
+            if (!is.null(periodo)) {
+                data_inicio <- periodo$inicio
+                data_fim <- periodo$fim
             } else {
                 data_inicio <- as.Date(intervalo$minimo[1])
                 data_fim <- as.Date(intervalo$maximo[1])
@@ -454,10 +493,15 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
                 paste0(
                     format(intervalo_exibido[1], "%d/%m/%Y"), " a ",
                     format(intervalo_exibido[2], "%d/%m/%Y"),
-                    if (isTRUE(input$usar_filtro_periodo)) {
-                        " (filtro ativo — ajustável na aba \"Auditoria - Gráfico\")"
-                    } else {
-                        " (todo o histórico — ative o filtro na aba \"Auditoria - Gráfico\" para restringir)"
+                    {
+                        periodo <- periodoEscolhido()
+                        if (is.null(periodo)) {
+                            " (todo o histórico — informe a data inicial e a final na aba \"Auditoria - Gráfico\" para restringir)"
+                        } else if (isTRUE(periodo$invertido)) {
+                            " (datas informadas na aba \"Auditoria - Gráfico\"; a inicial era posterior à final e foram invertidas)"
+                        } else {
+                            " (datas informadas na aba \"Auditoria - Gráfico\")"
+                        }
                     }
                 ),
                 tags$br(),

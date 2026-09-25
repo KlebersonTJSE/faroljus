@@ -157,7 +157,19 @@ totp_verificar <- function(secret_base32, codigo, tempo = Sys.time(),
 # Padrão aceito por Microsoft Authenticator, Google Authenticator etc.
 # -----------------------------------------------------
 
-totp_provisioning_uri <- function(login, secret_base32, emissor = "RadarSocial") {
+# Emissor: nome exibido no app Authenticator ao lado do login.
+# Configurável via TOTP_EMISSOR no .Renviron (padrão "Farol Jus"). Trocar
+# o emissor NÃO invalida cadastros já feitos (o código depende só da
+# chave secreta) — só muda o rótulo dos cadastros novos ou refeitos.
+TOTP_EMISSOR_PADRAO <- "Farol Jus"
+
+totp_provisioning_uri <- function(login, secret_base32,
+                                  emissor = Sys.getenv("TOTP_EMISSOR", unset = TOTP_EMISSOR_PADRAO)) {
+    
+    if (!nzchar(trimws(emissor))) {
+        emissor <- TOTP_EMISSOR_PADRAO
+    }
+    
     
     paste0(
         "otpauth://totp/",
@@ -281,20 +293,56 @@ listar_auditoria_login <- function(con, data_inicio, data_fim) {
 }
 
 # -----------------------------------------------------
-# ESQUEMA MULTI-EMPRESA (coluna "distro")
+# ESQUEMA DO BANCO (usuarios_totp / login_auditoria)
 # -----------------------------------------------------
-# Instalações que já rodaram uma versão anterior deste app (antes do
-# suporte multi-empresa) têm a tabela usuarios_totp sem a coluna
-# "distro" — CREATE TABLE IF NOT EXISTS não adiciona colunas a uma
-# tabela já existente, então isso é feito à parte. Chame esta função
-# uma vez, logo após abrir a conexão SQLite (ver app.R).
+# Chame esta função uma vez, logo após abrir a conexão SQLite (ver
+# app.R). É idempotente — pode rodar a cada início da aplicação:
+#
+#   1) Cria as tabelas usuarios_totp e login_auditoria se ainda não
+#      existirem. Antes, a função assumia que usuarios_totp já existia
+#      (dbListFields direto), então um banco novo/vazio derrubava a
+#      aplicação na inicialização.
+#   2) Migração multi-empresa: instalações de uma versão anterior deste
+#      app têm usuarios_totp sem a coluna "distro" — CREATE TABLE IF NOT
+#      EXISTS não adiciona colunas a uma tabela já existente, então isso
+#      é feito à parte.
+#
+# Tabelas e dados existentes nunca são recriados nem sobrescritos.
 garantir_schema_totp <- function(con) {
+    
+    DBI::dbExecute(
+        con,
+        "
+    CREATE TABLE IF NOT EXISTS usuarios_totp (
+      login      TEXT PRIMARY KEY,
+      nome       TEXT NOT NULL,
+      secret_key TEXT NOT NULL,
+      distro     TEXT,
+      ativo      INTEGER NOT NULL DEFAULT 1
+    )
+    "
+    )
+    
+    DBI::dbExecute(
+        con,
+        "
+    CREATE TABLE IF NOT EXISTS login_auditoria (
+      id       INTEGER PRIMARY KEY AUTOINCREMENT,
+      login    TEXT,
+      metodo   TEXT,
+      sucesso  INTEGER,
+      datahora TEXT
+    )
+    "
+    )
     
     colunas_totp <- DBI::dbListFields(con, "usuarios_totp")
     
     if (!("distro" %in% colunas_totp)) {
         DBI::dbExecute(con, "ALTER TABLE usuarios_totp ADD COLUMN distro TEXT")
     }
+    
+    invisible(TRUE)
     
 }
 

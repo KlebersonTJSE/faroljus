@@ -1,9 +1,20 @@
 # =========================================================================
-# app.R — Farol Jus (Formato HTML)
+# app.R — FarolJus
 # -------------------------------------------------------------------------
 # Login corporativo (Active Directory) ou código Authenticator (TOTP),
 # seguindo o mesmo layout/fluxo de autenticação usado em outros sistemas
-# internos, adaptado para a aplicação Declaraserv.
+# internos.
+#
+#   - Barra lateral de ícones com um ícone "Menu" no topo, que expande/
+#     recolhe a barra mostrando a descrição de cada ícone.
+#   - "Administração" (janela modal com o cadastro TOTP e a auditoria de
+#     login) e "Trocar empresa": disponíveis só para quem entrou via Login
+#     Corporativo (AD). Um usuário TOTP continua sempre fixo na empresa
+#     do próprio cadastro. (Regra centralizada em ehAdmin() /
+#     podeTrocarEmpresa(), no server.)
+#   - O módulo Alertas recebe a empresa da sessão (distroSelecionado) e a
+#     conexão SQLite (con), usada para traduzir os códigos de Situação
+#     Profissional Atual e Cargo.
 #
 # Corrige o diretório de trabalho caso o projeto não
 # tenha sido aberto pelo .Rproj
@@ -18,7 +29,6 @@ here::i_am("app.R")
 
 readRenviron(here::here(".Renviron"))
 
-library(shiny)
 library(bslib)
 library(DT)
 library(jsonlite)
@@ -26,6 +36,12 @@ library(digest)
 
 library(DBI)
 library(RSQLite)
+
+# shiny é carregado depois de jsonlite de propósito: jsonlite também
+# exporta validate(), e o pacote carregado por último fica na frente na
+# busca de funções. Assim, um validate() sem "shiny::" continua
+# resolvendo para shiny::validate().
+library(shiny)
 
 library(reticulate)
 
@@ -41,11 +57,23 @@ use_python(python_path, required = TRUE)
 
 # =====================================================
 # CARREGA CONEXAO DB PARA LOGIN COM AUTH
+# -----------------------------------------------------
+# Se a pasta data/ não existir (ex.: projeto recém-clonado), o SQLite
+# não consegue criar o arquivo — a pasta é criada antes. Um arquivo
+# novo/vazio é aceito: garantir_schema_totp(), mais abaixo, cria as
+# tabelas que faltarem.
 # =====================================================
+dir.create(here::here("data"), recursive = TRUE, showWarnings = FALSE)
+
 con <- dbConnect(
     SQLite(),
-    "data/radarsocial.db"
+    here::here("data", "radarsocial.db")
 )
+
+# Fecha a conexão SQLite quando a aplicação for encerrada.
+onStop(function() {
+    try(DBI::dbDisconnect(con), silent = TRUE)
+})
 
 # =========================================================================
 # MÓDULOS DE AUTENTICAÇÃO, BANCO E UTILITÁRIOS
@@ -53,17 +81,21 @@ con <- dbConnect(
 source(here::here("R", "utils.R"))
 source(here::here("R", "auth.R"))
 source(here::here("R", "auth_totp.R"))
+# Integração com o IRIS (RJDBC/rJava): conectar_banco(),
+# consultar_iris() e testar_iris(). Requer Java instalado e JAVA_HOME,
+# IRIS_DRIVER_CLASS, IRIS_JAR_PATH e {DISTRO}_IRIS_* no .Renviron — ver
+# comentários em R/database.R.
 source(here::here("R", "database.R"))
 source(here::here("modules", "mod_totp_admin.R"))
-source(here::here("modules", "mod_usuario.R"))
 
 source(here::here("modules", "mod_alertas.R"))
 
 # =========================================================================
-# MIGRAÇÃO DE ESQUEMA (coluna "distro" em usuarios_totp)
+# ESQUEMA DO BANCO (usuarios_totp / login_auditoria + coluna "distro")
 # -------------------------------------------------------------------------
 # Precisa rodar logo após abrir a conexão e depois de source("auth_totp.R"),
-# de onde vem garantir_schema_totp().
+# de onde vem garantir_schema_totp(). Cria as tabelas num banco novo e
+# faz a migração da coluna "distro" num banco antigo. Idempotente.
 # =========================================================================
 garantir_schema_totp(con)
 
@@ -130,6 +162,77 @@ if (!file.exists(README_PATH)) {
         ". O botão de ajuda exibirá uma mensagem informando que o ",
         "arquivo não está disponível."
     )
+}
+
+# =========================================================================
+# ITEM DAS INFORMAÇÕES DO USUÁRIO (cabeçalho da tela principal)
+# -------------------------------------------------------------------------
+# Um par "Rótulo: valor" da grade .info-usuario. O title repete o texto
+# para ele aparecer inteiro ao passar o mouse, caso o valor seja cortado
+# (valores muito longos, como departamento/gestor, ficam em uma linha
+# com reticências — ver CSS .info-item).
+# =========================================================================
+info_item <- function(rotulo, valor) {
+    
+    texto_title <- if (is.character(valor) && length(valor) == 1) valor else NULL
+    
+    div(
+        class = "info-item",
+        title = texto_title,
+        tags$b(paste0(rotulo, ": ")),
+        valor
+    )
+    
+}
+
+# =========================================================================
+# TÍTULO DE JANELA MODAL COM "X" NO CANTO SUPERIOR DIREITO
+# -------------------------------------------------------------------------
+# Usado em Administração, Trocar empresa e Ver instruções (README).
+#
+#   - Sem `input_fechar`: o X fecha a janela direto pelo Bootstrap
+#     (data-dismiss / data-bs-dismiss, os dois — funciona no Bootstrap 4
+#     e no 5), igual ao botão modalButton() do rodapé.
+#   - Com `input_fechar`: o X dispara esse input do Shiny (em vez de
+#     fechar direto), para a janela que precisa fazer algo ao fechar —
+#     caso de Administração (ver observeEvent(input$fechar_admin)).
+#
+# O X vai para o canto graças à regra CSS .modal-header .modal-title
+# { flex: 1 1 auto; } — ver o bloco de estilos da UI.
+# =========================================================================
+titulo_modal <- function(icone, texto, input_fechar = NULL) {
+    
+    botao_x <- if (is.null(input_fechar)) {
+        tags$button(
+            type = "button",
+            class = "btn-close",
+            style = "position:absolute; top:50%; right:0; transform:translateY(-50%);",
+            `aria-label` = "Fechar",
+            title = "Fechar",
+            `data-dismiss` = "modal",
+            `data-bs-dismiss` = "modal"
+        )
+    } else {
+        tags$button(
+            type = "button",
+            class = "btn-close",
+            style = "position:absolute; top:50%; right:0; transform:translateY(-50%);",
+            `aria-label` = "Fechar",
+            title = "Fechar",
+            onclick = sprintf(
+                "Shiny.setInputValue('%s', Math.random(), {priority: 'event'})",
+                input_fechar
+            )
+        )
+    }
+    
+    div(
+        style = "position:relative; padding-right:28px;",
+        icon(icone, class = "me-2"),
+        texto,
+        botao_x
+    )
+    
 }
 
 # =====================================================
@@ -333,6 +436,7 @@ ui <- fluidPage(
         padding-top: 14px;
         gap: 12px;
         z-index: 1050;
+        transition: width .2s ease;
       }
 
       .icon-bar .icon-btn {
@@ -366,14 +470,65 @@ ui <- fluidPage(
         color: #fff;
       }
 
+      /* =============================================
+         ÍCONE MENU (expandir/recolher a barra lateral)
+         — maior que os demais e sempre no topo.
+         ============================================= */
+
+      .icon-bar .icon-btn-menu {
+        width: 44px;
+        height: 44px;
+        font-size: 20px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid rgba(255,255,255,.15);
+        padding-bottom: 10px;
+      }
+
+      /* Descrição ao lado de cada ícone — oculta por padrão, aparece
+         quando a barra está expandida (.icon-bar.expandida). */
+
+      .icon-bar .icon-label {
+        display: none;
+        margin-left: 10px;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .icon-bar.expandida {
+        width: 210px;
+        align-items: stretch;
+        padding-left: 8px;
+        padding-right: 8px;
+      }
+
+      .icon-bar.expandida .icon-btn {
+        width: 100%;
+        justify-content: flex-start;
+        padding: 0 8px;
+      }
+
+      .icon-bar.expandida .icon-btn-menu {
+        justify-content: flex-start;
+        padding-left: 8px;
+      }
+
+      .icon-bar.expandida .icon-label {
+        display: inline;
+      }
+
+      .icon-bar.expandida ~ #app-content {
+        margin-left: 210px;
+      }
+
       #app-content {
         margin-left: 52px;
         padding: 20px 25px;
+        transition: margin-left .2s ease;
       }
 
       .header-container {
         overflow: hidden;
-        max-height: 220px;
+        max-height: 400px; /* folga para a grade de informações quebrar em várias linhas em telas estreitas */
         opacity: 1;
         transition: max-height .28s ease,
                     opacity .2s ease,
@@ -385,6 +540,168 @@ ui <- fluidPage(
         max-height: 0;
         opacity: 0;
         margin-bottom: 0;
+      }
+
+      /* =============================================
+         CABEÇALHO: TÍTULO (logo + nome) E INFORMAÇÕES
+         ============================================= */
+
+      .header-titulo {
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+        margin-bottom: .75rem;
+      }
+
+      .header-titulo h2 {
+        margin: 0;
+      }
+
+      .header-logo {
+        height: 44px;
+        width: auto;
+      }
+
+      /* Grade: cada coluna tem no mínimo 260px e quantas couberem
+         dividem a largura disponível — em tela larga ficam 3 ou 4
+         informações por linha; em tela estreita, menos. */
+      .info-usuario {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: .3rem 1.75rem;
+        color: #555;
+        font-size: .92rem;
+      }
+
+      .info-item {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* =============================================
+         README (JANELA MODAL - Ver instruções)
+         ---------------------------------------------
+         Escala tipográfica própria: sem isto, os títulos do
+         Markdown usavam os tamanhos padrão do tema (h2 com
+         ~2rem etc.), grandes demais para uma janela modal e
+         desproporcionais ao texto.
+         ============================================= */
+
+      .readme-conteudo {
+        font-size: .92rem;
+        line-height: 1.6;
+        color: #333;
+      }
+
+      .readme-conteudo h1 {
+        font-size: 1.5rem;
+        font-weight: 700;
+        margin: .25rem 0 .5rem 0;
+      }
+
+      .readme-conteudo h2 {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: #003366;
+        margin: 1.6rem 0 .6rem 0;
+        padding-bottom: .3rem;
+        border-bottom: 1px solid #e3e7ec;
+      }
+
+      .readme-conteudo h3 {
+        font-size: 1.02rem;
+        font-weight: 600;
+        margin: 1.1rem 0 .4rem 0;
+      }
+
+      .readme-conteudo h4 {
+        font-size: .95rem;
+        font-weight: 600;
+        margin: 1rem 0 .35rem 0;
+      }
+
+      .readme-conteudo p,
+      .readme-conteudo li {
+        text-align: justify;
+      }
+
+      .readme-conteudo ul,
+      .readme-conteudo ol {
+        padding-left: 1.3rem;
+        margin-bottom: .75rem;
+      }
+
+      .readme-conteudo li {
+        margin-bottom: .2rem;
+      }
+
+      .readme-conteudo hr {
+        display: none;
+      }
+
+      .readme-conteudo pre {
+        background: #f6f8fa;
+        border: 1px solid #e3e7ec;
+        border-radius: .5rem;
+        padding: .75rem 1rem;
+        font-size: .82rem;
+      }
+
+      .readme-conteudo code {
+        font-size: .85em;
+      }
+
+      .readme-conteudo table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 1rem;
+        font-size: .85rem;
+      }
+
+      .readme-conteudo th,
+      .readme-conteudo td {
+        border: 1px solid #e3e7ec;
+        padding: .4rem .6rem;
+        vertical-align: top;
+      }
+
+      .readme-conteudo th {
+        background: #f4f6f9;
+        font-weight: 600;
+      }
+
+      .readme-conteudo blockquote {
+        border-left: 4px solid #0d6efd;
+        background: #f5f9ff;
+        padding: .6rem 1rem;
+        margin: 1rem 0;
+        color: #444;
+      }
+
+      .readme-conteudo blockquote p {
+        margin: 0;
+      }
+
+      .readme-conteudo img {
+        max-width: 100%;
+        height: auto;
+      }
+
+      /* =============================================
+         TÍTULO DOS MODAIS OCUPANDO A LARGURA TODA
+         ---------------------------------------------
+         No Bootstrap 5, o .modal-header é flex e o
+         .modal-title encolhe até o tamanho do texto — por
+         isso o X posicionado com 'right:0' dentro do título
+         ficava colado ao texto, e não no canto. Fazendo o
+         título crescer, o X vai para o canto superior
+         direito (vale para Administração e também para
+         Gerenciar Arquivos, que usa o mesmo padrão).
+         ============================================= */
+
+      .modal-header .modal-title {
+        flex: 1 1 auto;
       }
 
     ")),
@@ -480,6 +797,66 @@ ui <- fluidPage(
 
       );
 
+      Shiny.addCustomMessageHandler(
+
+        'toggle-icon-bar',
+
+        function(message) {
+
+          var barra =
+            document.querySelector(
+              '.icon-bar'
+            );
+
+          if (!barra) return;
+
+          if (message.expandida) {
+
+            barra.classList.add(
+              'expandida'
+            );
+
+          } else {
+
+            barra.classList.remove(
+              'expandida'
+            );
+
+          }
+
+        }
+
+      );
+
+      // Enviado por mod_alertas.R depois de fechar os modais de
+      // 'Gerenciar Arquivos'. Remove um backdrop do Bootstrap que tenha
+      // ficado 'grudado' na tela (bloqueando cliques) quando um modal é
+      // trocado por outro rapidamente. Sem este handler registrado, o
+      // navegador acusava erro de mensagem sem tratador.
+      Shiny.addCustomMessageHandler(
+
+        'limpar-modal-backdrop',
+
+        function(message) {
+
+          setTimeout(function() {
+
+            if (document.querySelector('.modal.show')) return;
+
+            document
+              .querySelectorAll('.modal-backdrop')
+              .forEach(function(el) { el.remove(); });
+
+            document.body.classList.remove('modal-open');
+            document.body.style.removeProperty('overflow');
+            document.body.style.removeProperty('padding-right');
+
+          }, 400);
+
+        }
+
+      );
+
     "))
         
     ),
@@ -511,7 +888,6 @@ server <- function(input, output, session) {
     autenticado <- reactiveVal(FALSE)
     usuarioLogado <- reactiveVal(NULL)
     dadosUsuario <- reactiveVal(NULL)
-    fotoUsuario <- reactiveVal(NULL)
     
     # Método escolhido na tela de seleção ("ad" | "totp" | NULL = seletor)
     metodoAcesso <- reactiveVal(NULL)
@@ -529,11 +905,19 @@ server <- function(input, output, session) {
     
     header_oculto <- reactiveVal(FALSE)
     
+    # Barra lateral (ícones) expandida ou não — ver ícone "toggle_icon_bar"
+    # e o handler JS "toggle-icon-bar".
+    iconBarExpandida <- reactiveVal(FALSE)
+    
     # ===================================================
     # MÓDULO SELECIONADO
+    # ---------------------------------------------------
+    # Começa em "Alertas" (antes era "Usuário", aba que não existe — o
+    # módulo Alertas ficava com ativo() = FALSE até o usuário clicar em
+    # uma aba).
     # ===================================================
     
-    menuSelecionado <- reactiveVal("Usuário")
+    menuSelecionado <- reactiveVal("Alertas")
     
     # Incrementado a cada logout — sinaliza para mod_totp_admin_server()
     # limpar seu estado interno (chave recém-gerada, campos do formulário),
@@ -541,6 +925,181 @@ server <- function(input, output, session) {
     # sem isso, essas informações ficariam visíveis para quem fizer login
     # em seguida na mesma aba/sessão.
     resetarAdminTotp <- reactiveVal(0)
+    
+    # ===================================================
+    # TROCA DE EMPRESA
+    # ---------------------------------------------------
+    # Quem pode trocar: quem entrou via Login Corporativo (AD) — mesmo
+    # perfil do ícone "Administração". Usuário TOTP fica sempre na
+    # empresa do próprio cadastro. Para mudar a regra, altere só
+    # podeTrocarEmpresa().
+    # ===================================================
+    
+    ehAdmin <- reactive({
+        isTRUE(autenticado()) && identical(metodoAutenticado(), "AD")
+    })
+    
+    podeTrocarEmpresa <- reactive({
+        ehAdmin()
+    })
+    
+    mostrar_modal_empresa <- function() {
+        
+        escolha_atual <- distroSelecionado()
+        
+        selecionada <- if (!is.null(escolha_atual) && escolha_atual %in% DISTROS_DISPONIVEIS) {
+            escolha_atual
+        } else if (length(DISTROS_DISPONIVEIS) > 0) {
+            DISTROS_DISPONIVEIS[1]
+        } else {
+            character(0)
+        }
+        
+        showModal(
+            modalDialog(
+                title = titulo_modal("building", "Trocar empresa"),
+                
+                if (length(DISTROS_DISPONIVEIS) == 0) {
+                    
+                    div(
+                        class = "alert alert-warning mb-0",
+                        "Nenhuma empresa está configurada em DISTRO_1, DISTRO_2... ",
+                        "no .Renviron."
+                    )
+                    
+                } else {
+                    
+                    tagList(
+                        p(
+                            class = "text-muted",
+                            "Selecione a empresa com a qual deseja trabalhar. Os ",
+                            "dados de Alertas exibidos passarão a seguir a empresa ",
+                            "selecionada abaixo."
+                        ),
+                        selectInput(
+                            "empresa_troca",
+                            "Empresa",
+                            choices = DISTROS_DISPONIVEIS,
+                            selected = selecionada,
+                            width = "100%"
+                        )
+                    )
+                    
+                },
+                
+                easyClose = TRUE,
+                
+                footer = tagList(
+                    modalButton("Cancelar"),
+                    if (length(DISTROS_DISPONIVEIS) > 0) {
+                        actionButton(
+                            "confirmar_troca_empresa",
+                            "Usar esta empresa",
+                            class = "btn-primary"
+                        )
+                    }
+                )
+            )
+        )
+        
+    }
+    
+    observeEvent(
+        input$trocar_empresa,
+        {
+            req(podeTrocarEmpresa())
+            mostrar_modal_empresa()
+        },
+        ignoreInit = TRUE
+    )
+    
+    observeEvent(
+        input$confirmar_troca_empresa,
+        {
+            req(podeTrocarEmpresa(), input$empresa_troca)
+            
+            nova_empresa <- input$empresa_troca
+            
+            # Defesa extra contra valor fora da lista (requisição manipulada).
+            if (!(nova_empresa %in% DISTROS_DISPONIVEIS)) {
+                showNotification("Empresa selecionada é inválida.", type = "error")
+                return(invisible(NULL))
+            }
+            
+            removeModal()
+            
+            if (identical(nova_empresa, distroSelecionado())) {
+                return(invisible(NULL))
+            }
+            
+            # Não é gravado em login_auditoria de propósito: essa tabela
+            # alimenta os gráficos de acessos de "Administração"
+            # (mod_totp_admin.R), e uma troca de empresa contaria ali como
+            # um login a mais.
+            distroSelecionado(nova_empresa)
+            
+            showNotification(
+                paste("Usando o sistema como a empresa", nova_empresa),
+                type = "message"
+            )
+        },
+        ignoreInit = TRUE
+    )
+    
+    # ===================================================
+    # ADMINISTRAÇÃO (janela modal)
+    # ---------------------------------------------------
+    # Antes era a aba "Administração TOTP". Agora abre em uma janela
+    # modal pelo ícone "Administração" da barra lateral (só para AD).
+    #
+    # adminAberto() substitui o antigo menuSelecionado() == "Administração
+    # TOTP" como `ativo` do módulo: as consultas ao banco (usuários TOTP,
+    # auditoria) só rodam com a janela aberta. Por isso a janela não fecha
+    # com clique fora/Esc (easyClose = FALSE) — só pelo "Fechar" ou pelo X,
+    # que passam por observeEvent(input$fechar_admin) e mantêm
+    # adminAberto() coerente.
+    #
+    # Ao fechar, resetarAdminTotp() é incrementado: limpa a chave
+    # recém-gerada (secret em texto puro) e os campos do formulário, para
+    # não reaparecerem na próxima abertura.
+    # ===================================================
+    
+    adminAberto <- reactiveVal(FALSE)
+    
+    observeEvent(
+        input$abrir_admin,
+        {
+            req(ehAdmin())
+            
+            adminAberto(TRUE)
+            
+            showModal(
+                modalDialog(
+                    title = titulo_modal(
+                        "user-shield",
+                        "Administração",
+                        input_fechar = "fechar_admin"
+                    ),
+                    mod_totp_admin_ui("totp_admin"),
+                    size = "xl",
+                    easyClose = FALSE,
+                    footer = actionButton("fechar_admin", "Fechar")
+                )
+            )
+        },
+        ignoreInit = TRUE
+    )
+    
+    observeEvent(
+        input$fechar_admin,
+        {
+            adminAberto(FALSE)
+            resetarAdminTotp(resetarAdminTotp() + 1)
+            removeModal()
+            session$sendCustomMessage("limpar-modal-backdrop", list())
+        },
+        ignoreInit = TRUE
+    )
     
     # ===================================================
     # SELEÇÃO DO MÉTODO DE ACESSO
@@ -645,19 +1204,15 @@ server <- function(input, output, session) {
                 usuarioLogado(input$usuario)
                 dadosUsuario(dados)
                 
-                fotoUsuario(
-                    obter_foto_usuario(dados)
-                )
-                
                 metodoAutenticado("AD")
                 distroSelecionado(distro_escolhida)
-                menuSelecionado("Usuário")
+                menuSelecionado("Alertas")
                 
-                # Garante que a aba volte para "Usuário" sem recriar a UI toda
+                # Garante que a aba volte para "Alertas" sem recriar a UI toda
                 updateTabsetPanel(
                     session,
                     "menu",
-                    selected = "Usuário"
+                    selected = "Alertas"
                 )
                 
                 showNotification(
@@ -730,15 +1285,14 @@ server <- function(input, output, session) {
                 autenticado(TRUE)
                 usuarioLogado(dados$login)
                 dadosUsuario(dados)
-                fotoUsuario(NULL)
                 metodoAutenticado("TOTP")
                 distroSelecionado(dados$distro)
-                menuSelecionado("Usuário")
+                menuSelecionado("Alertas")
                 
                 updateTabsetPanel(
                     session,
                     "menu",
-                    selected = "Usuário"
+                    selected = "Alertas"
                 )
                 
                 showNotification(
@@ -777,13 +1331,19 @@ server <- function(input, output, session) {
             autenticado(FALSE)
             usuarioLogado(NULL)
             dadosUsuario(NULL)
-            fotoUsuario(NULL)
             metodoAutenticado(NULL)
             metodoAcesso(NULL)
             distroSelecionado(NULL)
-            menuSelecionado("Usuário")
+            menuSelecionado("Alertas")
+            
+            # A tela principal é recriada no próximo login com o cabeçalho
+            # visível e a barra recolhida — o estado precisa acompanhar,
+            # senão o primeiro clique nesses ícones "não faz nada".
+            header_oculto(FALSE)
+            iconBarExpandida(FALSE)
             
             # Ver comentário na definição de resetarAdminTotp acima.
+            adminAberto(FALSE)
             resetarAdminTotp(resetarAdminTotp() + 1)
             
         },
@@ -816,6 +1376,29 @@ server <- function(input, output, session) {
     )
     
     # ===================================================
+    # ALTERNÂNCIA DA BARRA LATERAL (client-side, não recria a UI)
+    # ===================================================
+    
+    observeEvent(
+        
+        input$toggle_icon_bar,
+        
+        {
+            
+            iconBarExpandida(!iconBarExpandida())
+            
+            session$sendCustomMessage(
+                "toggle-icon-bar",
+                list(expandida = iconBarExpandida())
+            )
+            
+        },
+        
+        ignoreInit = TRUE
+        
+    )
+    
+    # ===================================================
     # README (janela modal, renderizado a partir de README.md)
     # ===================================================
     
@@ -832,7 +1415,13 @@ server <- function(input, output, session) {
                     collapse = "\n"
                 )
                 
-                shiny::markdown(texto_readme)
+                # div.readme-conteudo: escopo do CSS de tipografia do
+                # README (tamanhos de título, texto, tabelas, código) —
+                # ver bloco "README (JANELA MODAL)" nos estilos da UI.
+                div(
+                    class = "readme-conteudo",
+                    shiny::markdown(texto_readme)
+                )
                 
             } else {
                 
@@ -845,7 +1434,7 @@ server <- function(input, output, session) {
             
             showModal(
                 modalDialog(
-                    title = "README",
+                    title = titulo_modal("circle-info", "Instruções"),
                     conteudo_modal,
                     easyClose = TRUE,
                     size = "l",
@@ -898,7 +1487,7 @@ server <- function(input, output, session) {
                     class = "logo-container mb-4",
                     
                     tags$img(
-                        src = "img/logo_faroljus.png",
+                        src = "img/faroljus_logo_principal.png",
                         class = "logo-login",
                         alt = "FarolJus"
                     )
@@ -1073,25 +1662,75 @@ server <- function(input, output, session) {
             
             div(
                 
-                class = "icon-bar",
+                class = paste(
+                    "icon-bar",
+                    if (isolate(iconBarExpandida())) "expandida"
+                ),
+                
+                # Maior que os demais e sempre no topo: expande/recolhe a
+                # barra, revelando a descrição de cada ícone (ver CSS
+                # .icon-btn-menu / .icon-bar.expandida e o handler JS
+                # "toggle-icon-bar").
+                actionLink(
+                    "toggle_icon_bar",
+                    tagList(
+                        icon("bars"),
+                        tags$span(class = "icon-label", "Menu")
+                    ),
+                    class = "icon-btn icon-btn-menu",
+                    title = "Expandir/recolher menu"
+                ),
                 
                 actionLink(
                     "toggle_header",
-                    icon("id-badge"),
+                    tagList(
+                        icon("id-badge"),
+                        tags$span(class = "icon-label", "Mostrar/ocultar")
+                    ),
                     class = "icon-btn",
                     title = "Mostrar/ocultar informações do usuário"
                 ),
                 
+                if (ehAdmin()) {
+                    actionLink(
+                        "abrir_admin",
+                        tagList(
+                            icon("user-shield"),
+                            tags$span(class = "icon-label", "Administração")
+                        ),
+                        class = "icon-btn",
+                        title = "Administração"
+                    )
+                },
+                
+                if (podeTrocarEmpresa()) {
+                    actionLink(
+                        "trocar_empresa",
+                        tagList(
+                            icon("building"),
+                            tags$span(class = "icon-label", "Trocar empresa")
+                        ),
+                        class = "icon-btn",
+                        title = "Trocar empresa"
+                    )
+                },
+                
                 actionLink(
                     "mostrar_readme",
-                    icon("circle-info"),
+                    tagList(
+                        icon("circle-info"),
+                        tags$span(class = "icon-label", "Ver instruções")
+                    ),
                     class = "icon-btn",
                     title = "Ver instruções (README)"
                 ),
                 
                 actionLink(
                     "sair",
-                    icon("power-off"),
+                    tagList(
+                        icon("power-off"),
+                        tags$span(class = "icon-label", "Sair")
+                    ),
                     class = "icon-btn sair",
                     title = "Sair"
                 )
@@ -1112,70 +1751,60 @@ server <- function(input, output, session) {
                 
                 div(
                     
-                    class = "header-container",
+                    class = paste(
+                        "header-container",
+                        if (isolate(header_oculto())) "collapsed"
+                    ),
                     
-                    h2("Radar Social"),
+                    # Título: logo + "Farol Jus".
+                    div(
+                        class = "header-titulo",
+                        tags$img(
+                            src = "img/faroljus_logo_principal.png",
+                            class = "header-logo",
+                            alt = "Logo Farol Jus"
+                        ),
+                        h2("")
+                    ),
                     
+                    # Informações do usuário em grade (várias por linha,
+                    # quantas couberem na largura da tela — ver CSS
+                    # .info-usuario). A ordem abaixo é a ordem de leitura,
+                    # da esquerda para a direita.
+                    #
+                    # "Empresa" usa um textOutput próprio (em vez de ler
+                    # distroSelecionado() aqui): trocar de empresa só
+                    # atualiza esse item, sem recriar toda a tela_principal
+                    # (barra de ícones e abas).
                     if (identical(metodoAutenticado(), "AD")) {
                         
-                        tags$div(
+                        div(
+                            class = "info-usuario",
                             
-                            style = "color:#555;",
-                            
-                            tags$b("Usuário: "),
-                            obter_campo(dadosUsuario(), "displayName"),
-                            br(),
-                            
-                            tags$b("Departamento: "),
-                            obter_campo(dadosUsuario(), "department"),
-                            br(),
-                            
-                            tags$b("Criado em: "),
-                            formatar_whenCreated(
-                                obter_campo(dadosUsuario(), "whenCreated")
+                            info_item("Usuário", obter_campo(dadosUsuario(), "displayName")),
+                            info_item("Departamento", obter_campo(dadosUsuario(), "department")),
+                            info_item("Gestor", extrair_manager(dadosUsuario()$manager)),
+                            info_item("Empresa", textOutput("empresa_atual_display", inline = TRUE)),
+                            info_item(
+                                "Criado em",
+                                formatar_whenCreated(obter_campo(dadosUsuario(), "whenCreated"))
                             ),
-                            br(),
-                            
-                            tags$b("Último acesso: "),
-                            formatar_lastLogon(
-                                obter_campo(dadosUsuario(), "lastLogonTimestamp")
+                            info_item(
+                                "Último acesso",
+                                formatar_lastLogon(obter_campo(dadosUsuario(), "lastLogonTimestamp"))
                             ),
-                            br(),
-                            
-                            tags$b("Gestor: "),
-                            extrair_manager(dadosUsuario()$manager),
-                            br(),
-                            
-                            tags$b("Empresa: "),
-                            distroSelecionado(),
-                            br(),
-                            
-                            tags$b("Método de acesso: "),
-                            "Login Corporativo (AD)"
-                            
+                            info_item("Método de acesso", "Login Corporativo (AD)")
                         )
                         
                     } else {
                         
-                        tags$div(
+                        div(
+                            class = "info-usuario",
                             
-                            style = "color:#555;",
-                            
-                            tags$b("Usuário: "),
-                            dadosUsuario()$displayName,
-                            br(),
-                            
-                            tags$b("Login: "),
-                            dadosUsuario()$login,
-                            br(),
-                            
-                            tags$b("Empresa: "),
-                            distroSelecionado(),
-                            br(),
-                            
-                            tags$b("Método de acesso: "),
-                            "Código Authenticator (TOTP)"
-                            
+                            info_item("Usuário", dadosUsuario()$displayName),
+                            info_item("Login", dadosUsuario()$login),
+                            info_item("Empresa", textOutput("empresa_atual_display", inline = TRUE)),
+                            info_item("Método de acesso", "Código Authenticator (TOTP)")
                         )
                         
                     }
@@ -1195,14 +1824,12 @@ server <- function(input, output, session) {
                             id = "menu",
                             selected = isolate(menuSelecionado())
                         ),
+                        # "Usuário" foi removida e "Administração TOTP" virou
+                        # janela modal (ícone "Administração", ver
+                        # observeEvent(input$abrir_admin)).
                         list(
                             nav_panel("Alertas", mod_alertas_ui("alertas"))
-                        ),
-                        if (identical(metodoAutenticado(), "AD")) {
-                            list(
-                                nav_panel("Administração TOTP", mod_totp_admin_ui("totp_admin"))
-                            )
-                        }
+                        )
                     )
                 )
                 
@@ -1212,28 +1839,33 @@ server <- function(input, output, session) {
         
     })
     
+    output$empresa_atual_display <- renderText({
+        req(autenticado())
+        distroSelecionado()
+    })
+    
     # ===================================================
     # SERVIDORES DOS MÓDULOS
     # ===================================================
     
-    mod_usuario_server(
-        "usuario",
-        dados_usuario = dadosUsuario,
-        foto_usuario = fotoUsuario
-    )
-    
+    # Antes, empresa e con não eram repassados: empresa() ficava sempre
+    # NULL (o req(empresa()) do botão "Gerenciar Arquivos" abortava em
+    # silêncio e nenhum dado era carregado) e, sem con, as colunas
+    # Situação Profissional Atual / Cargo continuavam em código.
     mod_alertas_server(
         "alertas",
-        ativo = reactive(menuSelecionado() == "Alertas")
+        ativo = reactive(menuSelecionado() == "Alertas"),
+        empresa = distroSelecionado,
+        con = con
     )
     
-    # Cadastro TOTP fica disponível apenas para quem entrou via AD
-    # (a UI da aba só é renderizada nesse caso, mas o módulo em si
-    # não depende disso para funcionar caso a regra mude no futuro).
+    # Cadastro TOTP / auditoria: só roda com a janela "Administração"
+    # aberta E para login AD — a checagem de ehAdmin() aqui protege o
+    # módulo mesmo que alguém dispare input$abrir_admin manualmente.
     mod_totp_admin_server(
         "totp_admin",
         con = con,
-        ativo = reactive(menuSelecionado() == "Administração TOTP"),
+        ativo = reactive(adminAberto() && ehAdmin()),
         resetar = resetarAdminTotp
     )
     
