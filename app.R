@@ -1,5 +1,5 @@
 # =========================================================================
-# app.R — Radar Social (Formato HTML)
+# app.R — Farol Jus (Formato HTML)
 # -------------------------------------------------------------------------
 # Login corporativo (Active Directory) ou código Authenticator (TOTP),
 # seguindo o mesmo layout/fluxo de autenticação usado em outros sistemas
@@ -57,9 +57,7 @@ source(here::here("R", "database.R"))
 source(here::here("modules", "mod_totp_admin.R"))
 source(here::here("modules", "mod_usuario.R"))
 
-source(here::here("modules", "mod_rejeitados.R"))
-source(here::here("modules", "mod_inconsistencias.R"))
-source(here::here("modules", "mod_totalizadores.R"))
+source(here::here("modules", "mod_alertas.R"))
 
 # =========================================================================
 # MIGRAÇÃO DE ESQUEMA (coluna "distro" em usuarios_totp)
@@ -553,15 +551,11 @@ server <- function(input, output, session) {
         input$continuar,
         
         {
-            
             req(input$metodo_acesso)
-            
             metodoAcesso(input$metodo_acesso)
-            
         },
         
         ignoreInit = TRUE
-        
     )
     
     observeEvent(
@@ -648,9 +642,7 @@ server <- function(input, output, session) {
             if (!is.null(dados)) {
                 
                 autenticado(TRUE)
-                
                 usuarioLogado(input$usuario)
-                
                 dadosUsuario(dados)
                 
                 fotoUsuario(
@@ -658,9 +650,7 @@ server <- function(input, output, session) {
                 )
                 
                 metodoAutenticado("AD")
-                
                 distroSelecionado(distro_escolhida)
-                
                 menuSelecionado("Usuário")
                 
                 # Garante que a aba volte para "Usuário" sem recriar a UI toda
@@ -738,17 +728,11 @@ server <- function(input, output, session) {
             if (!is.null(dados)) {
                 
                 autenticado(TRUE)
-                
                 usuarioLogado(dados$login)
-                
                 dadosUsuario(dados)
-                
                 fotoUsuario(NULL)
-                
                 metodoAutenticado("TOTP")
-                
                 distroSelecionado(dados$distro)
-                
                 menuSelecionado("Usuário")
                 
                 updateTabsetPanel(
@@ -886,7 +870,6 @@ server <- function(input, output, session) {
         {
             
             req(input$menu)
-            
             menuSelecionado(input$menu)
             
         },
@@ -915,9 +898,9 @@ server <- function(input, output, session) {
                     class = "logo-container mb-4",
                     
                     tags$img(
-                        src = "img/radarSocial_logo_horizontal_fundo_claro.png",
+                        src = "img/logo_faroljus.png",
                         class = "logo-login",
-                        alt = "RadarSocial"
+                        alt = "FarolJus"
                     )
                 ),
                 
@@ -927,7 +910,7 @@ server <- function(input, output, session) {
                 ),
                 
                 tags$p(
-                    "Escolha como deseja entrar no RadarSocial",
+                    "Escolha como deseja entrar no FarolJus",
                     class = "login-subtitle text-muted mb-4"
                 ),
                 
@@ -1213,9 +1196,7 @@ server <- function(input, output, session) {
                             selected = isolate(menuSelecionado())
                         ),
                         list(
-                            nav_panel("Inconsistências", mod_inconsistencias_ui("inconsistencias")),
-                            nav_panel("Rejeitados", mod_rejeitados_ui("rejeitados")),
-                            nav_panel("Totalizadores", mod_totalizadores_ui("totalizadores"))
+                            nav_panel("Alertas", mod_alertas_ui("alertas"))
                         ),
                         if (identical(metodoAutenticado(), "AD")) {
                             list(
@@ -1241,19 +1222,9 @@ server <- function(input, output, session) {
         foto_usuario = fotoUsuario
     )
     
-    mod_rejeitados_server(
-        "rejeitados",
-        ativo = reactive(menuSelecionado() == "Rejeitados")
-    )
-    
-    mod_inconsistencias_server(
-        "inconsistencias",
-        ativo = reactive(menuSelecionado() == "Inconsistências")
-    )
-    
-    mod_totalizadores_server(
-        "totalizadores",
-        ativo = reactive(menuSelecionado() == "Totalizadores")
+    mod_alertas_server(
+        "alertas",
+        ativo = reactive(menuSelecionado() == "Alertas")
     )
     
     # Cadastro TOTP fica disponível apenas para quem entrou via AD
