@@ -11,11 +11,14 @@
 #     mais abas):
 #       "Serventias"         -> mod_alertas_serventias.R
 #                               (<PASTA_ALERTAS>/<EMPRESA>/serventias)
+#       "Magistrados"        -> mod_alertas_magistrados.R
+#                               (<PASTA_ALERTAS>/<EMPRESA>/magistrados)
 #       "Pessoal e Auxiliar" -> mod_alertas.R
 #                               (<PASTA_ALERTAS>/<EMPRESA>/pessoal)
-#     Ambos recebem a empresa da sessão (distroSelecionado); o de Pessoal
-#     também recebe a conexão SQLite (con), usada para traduzir os
-#     códigos de Situação Profissional Atual e Cargo.
+#     Todos recebem a empresa da sessão (distroSelecionado); os de
+#     Magistrados e de Pessoal também recebem a conexão SQLite (con),
+#     usada para traduzir os códigos de Situação Profissional Atual e
+#     Cargo (cada um com as próprias tabelas auxiliares).
 #   - Botão "Configurações": abre um submenu com "Administração" (janela
 #     modal com o cadastro TOTP e a auditoria de login), "Trocar empresa"
 #     e "Ver instruções". Administração e Trocar empresa só aparecem para
@@ -121,6 +124,8 @@ source(here::here("modules", "mod_alertas.R"))
 # Precisa vir DEPOIS de mod_alertas.R: reaproveita funções definidas lá
 # (caminho_alertas(), SUBPASTA_SERVENTIAS, ler_arquivo_alertas()...).
 source(here::here("modules", "mod_alertas_serventias.R"))
+# Também depende de mod_alertas.R (SUBPASTA_MAGISTRADOS, funções genéricas).
+source(here::here("modules", "mod_alertas_magistrados.R"))
 
 # =========================================================================
 # MÓDULOS (valores internos do navset "menu")
@@ -130,6 +135,7 @@ source(here::here("modules", "mod_alertas_serventias.R"))
 # aberto após o login/logout.
 # =========================================================================
 ABA_ALERTAS_SERVENTIAS <- "AlertasServentias"
+ABA_ALERTAS_MAGISTRADOS <- "AlertasMagistrados"
 ABA_ALERTAS_QUADRO <- "Alertas"
 ABA_INICIAL <- ABA_ALERTAS_SERVENTIAS
 
@@ -563,8 +569,8 @@ ui <- fluidPage(
         margin-left: 210px;
       }
 
-      /* Botão do módulo que está aberto (Serventias / Pessoal e
-         Auxiliar) — ver handler JS marcar-menu-ativo. */
+      /* Botão do módulo que está aberto (Serventias / Magistrados /
+         Pessoal e Auxiliar) — ver handler JS marcar-menu-ativo. */
       .icon-bar .icon-btn.ativo {
         background: rgba(255,255,255,.18);
         color: #fff;
@@ -979,7 +985,7 @@ ui <- fluidPage(
 
       );
 
-      // Enviado por mod_alertas.R e mod_alertas_serventias.R depois de fechar os modais de
+      // Enviado pelos módulos de alertas (mod_alertas*.R) depois de fechar os modais de
       // 'Gerenciar Arquivos'. Remove um backdrop do Bootstrap que tenha
       // ficado 'grudado' na tela (bloqueando cliques) quando um modal é
       // trocado por outro rapidamente. Sem este handler registrado, o
@@ -1621,6 +1627,10 @@ server <- function(input, output, session) {
         selecionar_menu(ABA_ALERTAS_SERVENTIAS)
     }, ignoreInit = TRUE)
     
+    observeEvent(input$ir_magistrados, {
+        selecionar_menu(ABA_ALERTAS_MAGISTRADOS)
+    }, ignoreInit = TRUE)
+    
     observeEvent(input$ir_pessoal, {
         selecionar_menu(ABA_ALERTAS_QUADRO)
     }, ignoreInit = TRUE)
@@ -1885,6 +1895,20 @@ server <- function(input, output, session) {
                 ),
                 
                 actionLink(
+                    "ir_magistrados",
+                    tagList(
+                        icon("gavel"),
+                        tags$span(class = "icon-label", "Magistrados")
+                    ),
+                    class = paste(
+                        "icon-btn",
+                        if (identical(isolate(menuSelecionado()), ABA_ALERTAS_MAGISTRADOS)) "ativo"
+                    ),
+                    title = "Magistrados",
+                    `data-menu` = ABA_ALERTAS_MAGISTRADOS
+                ),
+                
+                actionLink(
                     "ir_pessoal",
                     tagList(
                         icon("users"),
@@ -2047,8 +2071,8 @@ server <- function(input, output, session) {
                 # ===============================================
                 # MÓDULOS (painéis sem abas)
                 # -----------------------------------------------
-                # A troca de painel é feita pelos botões "Serventias" e
-                # "Pessoal e Auxiliar" da barra lateral (ver
+                # A troca de painel é feita pelos botões "Serventias",
+                # "Magistrados" e "Pessoal e Auxiliar" da barra lateral (ver
                 # selecionar_menu() no server).
                 # ===============================================
                 
@@ -2058,6 +2082,10 @@ server <- function(input, output, session) {
                     nav_panel_hidden(
                         value = ABA_ALERTAS_SERVENTIAS,
                         mod_alertas_serventias_ui("alertas_serventias")
+                    ),
+                    nav_panel_hidden(
+                        value = ABA_ALERTAS_MAGISTRADOS,
+                        mod_alertas_magistrados_ui("alertas_magistrados")
                     ),
                     nav_panel_hidden(
                         value = ABA_ALERTAS_QUADRO,
@@ -2088,6 +2116,13 @@ server <- function(input, output, session) {
         "alertas_serventias",
         ativo = reactive(menuSelecionado() == ABA_ALERTAS_SERVENTIAS),
         empresa = distroSelecionado
+    )
+    
+    mod_alertas_magistrados_server(
+        "alertas_magistrados",
+        ativo = reactive(menuSelecionado() == ABA_ALERTAS_MAGISTRADOS),
+        empresa = distroSelecionado,
+        con = con
     )
     
     mod_alertas_server(

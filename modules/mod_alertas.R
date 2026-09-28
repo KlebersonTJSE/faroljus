@@ -21,7 +21,8 @@
 #
 # Este arquivo também define funções GENÉRICAS (leitura de .xlsx, busca
 # "Detalhe", combos, botão de CSV) reaproveitadas por
-# mod_alertas_serventias.R — por isso ele é carregado primeiro no app.R.
+# mod_alertas_serventias.R e mod_alertas_magistrados.R — por isso ele é
+# carregado primeiro no app.R.
 # =====================================================
 
 library(shiny)
@@ -44,7 +45,8 @@ library(ggiraph)
 #
 # Essa opção é GLOBAL do processo R (não é possível limitar por
 # fileInput ou por módulo). Fica definida aqui e vale também para
-# mod_alertas_serventias.R (carregado depois deste arquivo no app.R).
+# mod_alertas_serventias.R e mod_alertas_magistrados.R (carregados depois
+# deste arquivo no app.R).
 #
 # Configurável via MAX_UPLOAD_MB no .Renviron (ou nas Vars do
 # shinyapps.io); sem essa variável, usa 50 MB como padrão. Isso não
@@ -72,6 +74,7 @@ options(shiny.maxRequestSize = MAX_UPLOAD_MB * 1024^2)
 #   <PASTA_ALERTAS>/<EMPRESA>/pessoal     -> mod_alertas.R
 #                                            (Quadro de Pessoal e Auxiliar)
 #   <PASTA_ALERTAS>/<EMPRESA>/serventias  -> mod_alertas_serventias.R
+#   <PASTA_ALERTAS>/<EMPRESA>/magistrados -> mod_alertas_magistrados.R
 # Como cada módulo só enxerga a própria subpasta, "Apagar" e "Enviar"
 # de um módulo nunca mexem nos arquivos do outro.
 #
@@ -87,11 +90,13 @@ PASTA_ALERTAS_BASE <- Sys.getenv("PASTA_ALERTAS", unset = "data")
 
 SUBPASTA_PESSOAL <- "pessoal"
 SUBPASTA_SERVENTIAS <- "serventias"
+SUBPASTA_MAGISTRADOS <- "magistrados"
 
 # Monta (e garante que existe) a subpasta de alertas da empresa
 # informada. Retorna NULL se `empresa` não estiver definida (ex.:
 # sessão ainda não autenticada). O padrão é a subpasta deste módulo
-# (pessoal); mod_alertas_serventias.R passa SUBPASTA_SERVENTIAS.
+# (pessoal); mod_alertas_serventias.R passa SUBPASTA_SERVENTIAS e
+# mod_alertas_magistrados.R, SUBPASTA_MAGISTRADOS.
 caminho_alertas <- function(empresa, subpasta = SUBPASTA_PESSOAL) {
     
     if (is.null(empresa) || is.na(empresa) || trimws(empresa) == "") {
@@ -601,7 +606,8 @@ consolidar_alertas_tabela <- function(df) {
 # =====================================================
 # FUNÇÕES GENÉRICAS DE LEITURA (.xlsx e .csv)
 # -----------------------------------------------------
-# Usadas por este módulo e por mod_alertas_serventias.R.
+# Usadas por este módulo, por mod_alertas_serventias.R e por
+# mod_alertas_magistrados.R.
 # =====================================================
 
 # Extensões aceitas. A ordem define a PRIORIDADE quando existem os dois
@@ -1080,6 +1086,10 @@ AGRUPAMENTOS_BASE_PESSOAL <- c(
 #     colunas de alerta                                     -> "base"
 #   - qualquer outra coisa                                  -> NA
 # Evita, por exemplo, gravar o arquivo de Serventias nesta pasta.
+#
+# Arquivos de MAGISTRADOS do MPM também têm CPF (e, os de alertas,
+# colunas "Alerta: ..."); são reconhecidos pela coluna "Órgão de lotação
+# do magistrado(a)" e recusados aqui — vão para o módulo Magistrados.
 identificar_tipo_arquivo_pessoal <- function(df) {
     
     if (is.null(df) || ncol(df) == 0) {
@@ -1089,6 +1099,10 @@ identificar_tipo_arquivo_pessoal <- function(df) {
     names(df) <- limpar_cabecalho(names(df))
     
     if (is.null(coluna_por_regex(df, REGEX_COL_CPF))) {
+        return(NA_character_)
+    }
+    
+    if (!is.null(coluna_por_regex(df, "^orgao de lotacao do\\(?a?\\)? ?magistrad"))) {
         return(NA_character_)
     }
     
