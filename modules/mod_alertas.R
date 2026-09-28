@@ -1,9 +1,32 @@
 # =====================================================
 # modules/mod_alertas.R
+# -----------------------------------------------------
+# Módulo "Pessoal e Auxiliar" (botão da barra lateral), com duas abas:
+#
+#   1) "Base de Dados - Quadro Pessoal e Auxiliar" — cadastro do Quadro
+#      de Pessoal e Auxiliar do MPM/CNJ, lido DIRETAMENTE da planilha
+#      quadro_pessoal_auxiliar.xlsx (ou .csv). A tabela tem as mesmas
+#      colunas do arquivo, na mesma ordem (Situação profissional atual e
+#      Cargo aparecem por extenso). Filtros: Status (padrão "Ativo"),
+#      CPF, Nome, Cargo, Situação profissional atual e Detalhe (busca o
+#      texto em todas as colunas). Gráfico com agrupamento selecionável.
+#
+#   2) "Alertas - Quadro Pessoal e Auxiliar" — arquivos de alertas do MPM
+#      (um ou vários, .csv ou .xlsx), consolidados. Funcionamento de
+#      sempre: filtros, alertas consolidados na tabela, gráficos, CSV.
+#
+# Todos os arquivos ficam na subpasta "pessoal" da empresa:
+#   <PASTA_ALERTAS>/<EMPRESA>/pessoal/quadro_pessoal_auxiliar.xlsx
+#   <PASTA_ALERTAS>/<EMPRESA>/pessoal/<arquivos de alertas>
+#
+# Este arquivo também define funções GENÉRICAS (leitura de .xlsx, busca
+# "Detalhe", combos, botão de CSV) reaproveitadas por
+# mod_alertas_serventias.R — por isso ele é carregado primeiro no app.R.
 # =====================================================
 
 library(shiny)
 library(readr)
+library(readxl)   # leitura direta de .xlsx
 library(dplyr)
 library(purrr)
 library(stringr)
@@ -20,8 +43,8 @@ library(ggiraph)
 # para caber confortavelmente vários arquivos de uma vez.
 #
 # Essa opção é GLOBAL do processo R (não é possível limitar por
-# fileInput ou por módulo). Como o FarolJus Lite só tem este módulo de
-# dados, ela fica definida aqui.
+# fileInput ou por módulo). Fica definida aqui e vale também para
+# mod_alertas_serventias.R (carregado depois deste arquivo no app.R).
 #
 # Configurável via MAX_UPLOAD_MB no .Renviron (ou nas Vars do
 # shinyapps.io); sem essa variável, usa 50 MB como padrão. Isso não
@@ -42,11 +65,16 @@ if (is.na(MAX_UPLOAD_MB) || MAX_UPLOAD_MB <= 0) {
 options(shiny.maxRequestSize = MAX_UPLOAD_MB * 1024^2)
 
 # =====================================================
-# CONFIGURAÇÃO (multi-empresa)
+# CONFIGURAÇÃO (multi-empresa, uma subpasta por módulo)
 # -----------------------------------------------------
-# Cada empresa (distro) tem sua própria subpasta de arquivos de
-# alertas:
-#   <PASTA_ALERTAS>/<EMPRESA>/alertas_csv
+# Cada empresa (distro) tem sua própria pasta, com uma subpasta para
+# cada módulo de alertas:
+#   <PASTA_ALERTAS>/<EMPRESA>/pessoal     -> mod_alertas.R
+#                                            (Quadro de Pessoal e Auxiliar)
+#   <PASTA_ALERTAS>/<EMPRESA>/serventias  -> mod_alertas_serventias.R
+# Como cada módulo só enxerga a própria subpasta, "Apagar" e "Enviar"
+# de um módulo nunca mexem nos arquivos do outro.
+#
 # PASTA_ALERTAS (env var, default "data") define só o diretório raiz;
 # a empresa é resolvida em tempo de execução a partir do usuário
 # autenticado (ver parâmetro `empresa` de mod_alertas_server(),
@@ -57,16 +85,20 @@ options(shiny.maxRequestSize = MAX_UPLOAD_MB * 1024^2)
 
 PASTA_ALERTAS_BASE <- Sys.getenv("PASTA_ALERTAS", unset = "data")
 
-# Monta (e garante que existe) a pasta de alertas da empresa
+SUBPASTA_PESSOAL <- "pessoal"
+SUBPASTA_SERVENTIAS <- "serventias"
+
+# Monta (e garante que existe) a subpasta de alertas da empresa
 # informada. Retorna NULL se `empresa` não estiver definida (ex.:
-# sessão ainda não autenticada).
-caminho_alertas <- function(empresa) {
+# sessão ainda não autenticada). O padrão é a subpasta deste módulo
+# (pessoal); mod_alertas_serventias.R passa SUBPASTA_SERVENTIAS.
+caminho_alertas <- function(empresa, subpasta = SUBPASTA_PESSOAL) {
     
     if (is.null(empresa) || is.na(empresa) || trimws(empresa) == "") {
         return(NULL)
     }
     
-    caminho <- file.path(PASTA_ALERTAS_BASE, trimws(empresa), "alertas_csv")
+    caminho <- file.path(PASTA_ALERTAS_BASE, trimws(empresa), subpasta)
     
     if (!dir.exists(caminho)) {
         dir.create(caminho, recursive = TRUE, showWarnings = FALSE)
@@ -98,7 +130,7 @@ tempo_decorrido <- function(inicio) {
 # sendo processados normalmente.
 # =====================================================
 
-ler_arquivo_alertas <- function(arquivo) {
+ler_arquivo_alertas <- function(arquivo, n_max = Inf) {
     
     resultado <- tryCatch({
         
@@ -110,7 +142,8 @@ ler_arquivo_alertas <- function(arquivo) {
                 decimal_mark = ",",
                 grouping_mark = "."
             ),
-            col_types = cols(.default = col_character())
+            col_types = cols(.default = col_character()),
+            n_max = n_max
         )
         
         if (ncol(df) <= 1) {
@@ -120,7 +153,8 @@ ler_arquivo_alertas <- function(arquivo) {
                 delim = NULL,
                 show_col_types = FALSE,
                 locale = locale(encoding = "UTF-8"),
-                col_types = cols(.default = col_character())
+                col_types = cols(.default = col_character()),
+                n_max = n_max
             )
             
         }
@@ -146,35 +180,54 @@ ler_arquivo_alertas <- function(arquivo) {
 }
 
 # =====================================================
-# CARREGAMENTO
+# CARREGAMENTO DOS ALERTAS
 # -----------------------------------------------------
-# Consolida todos os CSVs da pasta de alertas da empresa. Arquivos com
-# colunas diferentes entre si (ex.: um trouxe uma coluna "Alerta X" que
-# o outro não tem) são combinados sem problema — bind_rows() preenche
-# com NA o que faltar em cada um.
+# Consolida todos os arquivos de alertas (.csv ou .xlsx) da pasta
+# "pessoal" da empresa — menos a base de dados (quadro_pessoal_auxiliar,
+# ver listar_arquivos_alertas_pessoal()). Arquivos com colunas diferentes
+# entre si são combinados sem problema — bind_rows() preenche com NA o
+# que faltar em cada um.
+#
+# Um arquivo sem nenhuma coluna "Alerta..."/"Conflito..." (ex.: uma cópia
+# da base colocada na pasta com outro nome) é ignorado com aviso, para
+# não misturar milhares de linhas de cadastro com os alertas.
 # =====================================================
 
-carregar_alertas <- function(caminho) {
+carregar_alertas <- function(caminho, arquivos = listar_arquivos_alertas_pessoal(caminho)) {
     
     if (is.null(caminho)) {
         return(data.frame())
     }
     
-    arquivos <- list.files(
-        caminho,
-        pattern = "\\.csv$",
-        full.names = TRUE
-    )
-    
     if (length(arquivos) == 0) {
-        warning("Nenhum arquivo encontrado em: ", caminho)
         return(data.frame())
     }
     
-    resultados <- map(arquivos, ler_arquivo_alertas)
+    resultados <- map(arquivos, function(arquivo) {
+        
+        df <- ler_arquivo_dados(arquivo)
+        
+        if (is.null(df)) {
+            return(NULL)
+        }
+        
+        names(df) <- limpar_cabecalho(names(df))
+        
+        if (length(colunas_por_prefixo(df, "Alerta")) == 0 &&
+            length(colunas_por_prefixo(df, "Conflito")) == 0) {
+            
+            msg <- paste0(
+                "O arquivo ", basename(arquivo), " não tem colunas de Alerta/Conflito ",
+                "e foi ignorado na aba de alertas."
+            )
+            warning(msg)
+            showNotification(msg, type = "warning", duration = 12)
+            return(NULL)
+        }
+        
+        df
+    })
     
-    # Remove arquivos ignorados por ler_arquivo_alertas() (erro de
-    # leitura — ver tryCatch lá dentro).
     resultados <- Filter(Negate(is.null), resultados)
     
     if (length(resultados) == 0) {
@@ -185,6 +238,7 @@ carregar_alertas <- function(caminho) {
         distinct()
     
 }
+
 
 # =====================================================
 # COLUNAS POR PREFIXO
@@ -229,7 +283,7 @@ colunas_com_dados <- function(df, colunas) {
 # No arquivo do Quadro de Pessoal e Auxiliar (servidores) do CNJ/MPM,
 # as colunas "Situação Profissional Atual" e "Cargo" vêm como código
 # numérico. A correspondência código -> nomenclatura fica em duas
-# tabelas do banco SQLite da aplicação (o mesmo faroljus_lite.db do
+# tabelas do banco SQLite da aplicação (o mesmo faroljus.db do
 # controle de acesso, conexão `con` do app.R):
 #
 #   - tab_situacao_profissional_servidor (codigo, nomenclatura)
@@ -543,6 +597,514 @@ consolidar_alertas_tabela <- function(df) {
     
 }
 
+
+# =====================================================
+# FUNÇÕES GENÉRICAS DE LEITURA (.xlsx e .csv)
+# -----------------------------------------------------
+# Usadas por este módulo e por mod_alertas_serventias.R.
+# =====================================================
+
+# Extensões aceitas. A ordem define a PRIORIDADE quando existem os dois
+# formatos do mesmo arquivo na pasta (.xlsx antes de .csv).
+EXTENSOES_PLANILHA <- c("xlsx", "csv")
+
+# Rótulo para valor vazio em filtros e gráficos.
+ROTULO_VALOR_VAZIO <- "(Não informado)"
+
+extensao_arquivo <- function(nome) {
+    tolower(tools::file_ext(nome))
+}
+
+limpar_cabecalho <- function(nomes) {
+    str_trim(str_remove(nomes, "^\uFEFF"))
+}
+
+# Converte uma coluna lida com col_types = "list" em texto, célula a
+# célula, preservando o que aparece na planilha:
+#   - número -> sem notação científica e sem ".0" (8335, 49080901);
+#   - data   -> dd/mm/aaaa (ou dd/mm/aaaa hh:mm, se tiver horário);
+#   - texto  -> como está (códigos como "0001" mantêm os zeros).
+celulas_para_texto <- function(celulas) {
+    
+    vapply(
+        celulas,
+        function(v) {
+            
+            if (is.null(v) || length(v) == 0 || is.na(v[1])) {
+                return(NA_character_)
+            }
+            
+            v <- v[1]
+            
+            if (inherits(v, c("POSIXt", "Date"))) {
+                tem_hora <- inherits(v, "POSIXt") && format(v, "%H:%M:%S") != "00:00:00"
+                return(format(v, if (tem_hora) "%d/%m/%Y %H:%M" else "%d/%m/%Y"))
+            }
+            
+            if (is.numeric(v)) {
+                return(format(v, scientific = FALSE, trim = TRUE, digits = 15))
+            }
+            
+            as.character(v)
+            
+        },
+        character(1),
+        USE.NAMES = FALSE
+    )
+    
+}
+
+# Lê uma planilha .xlsx com TODAS as colunas como texto, na ordem da
+# planilha. Usa a aba `aba_preferida` se existir (sem diferenciar
+# maiúsculas); senão, a primeira aba.
+#
+# Desempenho: ler célula a célula (col_types = "list") é lento em
+# planilhas grandes (o Quadro de Pessoal tem ~17 mil linhas). Por isso a
+# leitura é feita como texto ("text", rápido) e só as colunas que têm
+# células de DATA de verdade — detectadas numa amostra das primeiras
+# 1.000 linhas — são lidas célula a célula, para não virarem o número
+# serial do Excel (ex.: 44385 em vez de 08/07/2021).
+#
+# Erros viram aviso e o arquivo é ignorado (retorna NULL), como em
+# ler_arquivo_alertas().
+ler_planilha_xlsx <- function(caminho, aba_preferida = NULL, nome_exibicao = basename(caminho),
+                              n_max = Inf) {
+    
+    tryCatch({
+        
+        abas <- readxl::excel_sheets(caminho)
+        
+        aba <- if (!is.null(aba_preferida) && tolower(aba_preferida) %in% tolower(abas)) {
+            abas[tolower(abas) == tolower(aba_preferida)][1]
+        } else {
+            abas[1]
+        }
+        
+        amostra <- suppressMessages(
+            readxl::read_excel(
+                caminho, sheet = aba, col_types = "list",
+                n_max = min(1000, n_max), .name_repair = "unique"
+            )
+        )
+        
+        tem_data <- vapply(
+            amostra,
+            function(col) any(vapply(col, function(v) inherits(v, c("POSIXt", "Date")), logical(1))),
+            logical(1)
+        )
+        
+        brutos <- suppressMessages(
+            readxl::read_excel(
+                caminho, sheet = aba,
+                col_types = ifelse(tem_data, "list", "text"),
+                n_max = n_max,
+                .name_repair = "unique"
+            )
+        )
+        
+        for (i in which(tem_data)) {
+            brutos[[i]] <- celulas_para_texto(brutos[[i]])
+        }
+        
+        tibble::as_tibble(brutos, .name_repair = "minimal")
+        
+    }, error = function(e) {
+        
+        msg <- paste0(
+            "Não foi possível ler a planilha ", nome_exibicao, ": ",
+            conditionMessage(e), ". Esse arquivo foi ignorado."
+        )
+        
+        warning(msg)
+        showNotification(msg, type = "warning", duration = 15)
+        
+        NULL
+        
+    })
+    
+}
+
+# Lê .xlsx (ler_planilha_xlsx) ou .csv (ler_arquivo_alertas: ";" com
+# fallback para detecção automática). `extensao` é informada no upload,
+# em que o nome temporário do arquivo pode não refletir o original.
+# `n_max` limita as linhas lidas da planilha — no upload, para
+# identificar o tipo do arquivo, bastam o cabeçalho e poucas linhas.
+# Extensão não suportada -> NULL.
+ler_arquivo_dados <- function(caminho, extensao = extensao_arquivo(caminho),
+                              nome_exibicao = basename(caminho), aba_preferida = NULL,
+                              n_max = Inf) {
+    
+    if (identical(extensao, "xlsx")) {
+        ler_planilha_xlsx(caminho, aba_preferida, nome_exibicao, n_max = n_max)
+    } else if (identical(extensao, "csv")) {
+        suppressMessages(ler_arquivo_alertas(caminho, n_max = n_max))
+    } else {
+        NULL
+    }
+    
+}
+
+# Ajustes comuns depois da leitura de uma BASE DE DADOS:
+#   - remove a coluna sem nome gerada pelo ";" no fim de cada linha dos
+#     CSVs do MPM (ou uma coluna sem cabeçalho na planilha) quando vazia;
+#   - tira o BOM e espaços nas pontas dos cabeçalhos e dos valores;
+#   - remove linhas duplicadas.
+limpar_dados_lidos <- function(df) {
+    
+    if (is.null(df) || nrow(df) == 0) {
+        return(data.frame())
+    }
+    
+    names(df) <- limpar_cabecalho(names(df))
+    
+    sem_nome <- str_detect(names(df), "^\\.\\.\\.\\d+$") | names(df) == ""
+    
+    vazias <- vapply(
+        df,
+        function(v) all(is.na(v) | str_trim(v) == ""),
+        logical(1)
+    )
+    
+    df <- df[, !(sem_nome & vazias), drop = FALSE]
+    
+    df %>%
+        mutate(across(everything(), ~ str_trim(as.character(.x)))) %>%
+        distinct()
+    
+}
+
+# =====================================================
+# FUNÇÕES GENÉRICAS DE FILTRO / EXIBIÇÃO
+# =====================================================
+
+# Localiza uma coluna pelo nome normalizado (sem acento, minúsculo)
+# contra uma expressão regular. Devolve o NOME da coluna, ou NULL.
+coluna_por_regex <- function(df, regex) {
+    
+    if (is.null(df) || ncol(df) == 0) {
+        return(NULL)
+    }
+    
+    idx <- which(str_detect(normalizar_nome_coluna(names(df)), regex))
+    
+    if (length(idx) == 0) NULL else names(df)[idx[1]]
+    
+}
+
+# Valores de uma coluna linha a linha, com ROTULO_VALOR_VAZIO para os
+# vazios. NULL se a coluna não existir.
+valores_coluna_regex <- function(df, regex) {
+    
+    col <- coluna_por_regex(df, regex)
+    
+    if (is.null(col) || nrow(df) == 0) {
+        return(NULL)
+    }
+    
+    valores <- str_trim(as.character(df[[col]]))
+    
+    ifelse(is.na(valores) | valores == "", ROTULO_VALOR_VAZIO, valores)
+    
+}
+
+# Opções de um combo: ordem "natural" (0001 < 0002 < 0010; 1 < 2 < 10),
+# com "(Não informado)" por último.
+opcoes_combo <- function(valores) {
+    
+    valores <- unique(valores)
+    
+    c(
+        str_sort(setdiff(valores, ROTULO_VALOR_VAZIO), numeric = TRUE),
+        intersect(ROTULO_VALOR_VAZIO, valores)
+    )
+    
+}
+
+# Mantém a seleção atual se ela ainda existir nas opções; senão, volta
+# para `padrao` (se existir) ou "Todos".
+selecao_valida <- function(atual, opcoes, padrao = "Todos") {
+    
+    if (!is.null(atual) && atual %in% c("Todos", opcoes)) {
+        atual
+    } else if (padrao %in% c("Todos", opcoes)) {
+        padrao
+    } else {
+        "Todos"
+    }
+    
+}
+
+# Normaliza texto para busca: minúsculo e sem acento ("Aracajú" acha
+# "ARACAJU").
+normalizar_texto_busca <- function(x) {
+    str_to_lower(stringi::stri_trans_general(x, "Latin-ASCII"))
+}
+
+# Uma string por linha com o conteúdo de TODAS as colunas, já
+# normalizada — calculada uma vez por carga do arquivo e usada pelo
+# filtro Detalhe. O separador evita que o fim de uma coluna "emende" com
+# o início da seguinte e gere um acerto falso.
+texto_busca_linhas <- function(df) {
+    
+    if (is.null(df) || nrow(df) == 0) {
+        return(character(0))
+    }
+    
+    # Normaliza cada coluna pelos valores DISTINTOS (muitos se repetem —
+    # cargos, situações, datas) e só depois junta: bem mais rápido do que
+    # normalizar o texto inteiro de cada linha em bases grandes.
+    colunas <- lapply(df, function(x) {
+        x <- as.character(x)
+        x[is.na(x)] <- ""
+        distintos <- unique(x)
+        normalizar_texto_busca(distintos)[match(x, distintos)]
+    })
+    
+    do.call(paste, c(colunas, sep = " \u00a6 "))
+    
+}
+
+# Conteúdo da aba "Gerar arquivo CSV".
+ui_csv_dados <- function(ns, id_download, tem_dados) {
+    
+    div(
+        class = "mt-4",
+        style = "max-width: 420px;",
+        
+        p(
+            class = "text-muted",
+            "Gera um arquivo .csv com os dados exibidos na aba \"Tabela\" (respeitando os filtros aplicados e a busca da tabela)."
+        ),
+        
+        if (tem_dados) {
+            
+            downloadButton(
+                ns(id_download),
+                "Gerar arquivo CSV",
+                icon = icon("download"),
+                class = "btn btn-primary btn-acao"
+            )
+            
+        } else {
+            
+            tagList(
+                tags$button(
+                    type = "button",
+                    class = "btn btn-primary btn-acao",
+                    disabled = "disabled",
+                    icon("download", class = "me-2"),
+                    "Gerar arquivo CSV"
+                ),
+                div(
+                    class = "text-muted mt-2",
+                    style = "font-size: .82rem;",
+                    "Não há dados na tabela para exportar."
+                )
+            )
+            
+        }
+    )
+    
+}
+
+# Gráfico de barras horizontais (ggiraph) com tooltip — usado nos
+# gráficos das bases de dados. `resumo` precisa ter as colunas Grupo,
+# Quantidade e dica (HTML do tooltip).
+grafico_barras_girafe <- function(resumo, titulo, subtitulo = NULL, largura_rotulo = 45) {
+    
+    resumo <- resumo %>%
+        arrange(Quantidade, desc(Grupo)) %>%   # com coord_flip, a maior fica no topo
+        mutate(
+            rotulo = str_wrap(Grupo, largura_rotulo),
+            rotulo = factor(rotulo, levels = unique(rotulo))
+        )
+    
+    p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
+        geom_col_interactive(aes(tooltip = dica, data_id = Grupo), fill = "#2C7FB8") +
+        geom_text(aes(label = format(Quantidade, big.mark = ".", decimal.mark = ",")), hjust = -0.2, size = 3.2) +
+        coord_flip() +
+        scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+        labs(title = titulo, subtitle = subtitulo, x = "", y = "Quantidade") +
+        theme_minimal()
+    
+    linhas_rotulo <- sum(str_count(levels(resumo$rotulo), "\n") + 1)
+    
+    girafe(
+        ggobj = p,
+        width_svg = 9,
+        height_svg = max(3, 0.24 * max(nrow(resumo), linhas_rotulo) + 1.6),
+        options = list(
+            opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
+            opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
+            opts_sizing(rescale = TRUE, width = 1)
+        )
+    )
+    
+}
+
+# =====================================================
+# BASE DE DADOS — QUADRO DE PESSOAL E AUXILIAR
+# -----------------------------------------------------
+# Como a base é reconhecida na pasta "pessoal" (nesta ordem):
+#
+#   1) PELO NOME, comparado de forma tolerante (normalizar_nome_arquivo):
+#      sem diferenciar maiúsculas, acentos, espaços, hífens ou "_".
+#      Assim "quadro_pessoal_auxiliar.xlsx", "Quadro_pessoal_e_auxiliar.xlsx"
+#      e "Quadro pessoal e auxiliar.xlsx" são todos reconhecidos.
+#
+#   2) PELO CONTEÚDO, se nenhum arquivo tiver um desses nomes: o arquivo
+#      .xlsx/.csv cujo cabeçalho tem CPF + Situação profissional/Status e
+#      nenhuma coluna de Alerta/Conflito (identificar_tipo_arquivo_pessoal,
+#      lendo só as primeiras linhas). Havendo mais de um, vale o mais
+#      recente.
+#
+# Todo o resto (.xlsx/.csv) é tratado como arquivo de alertas. Arquivos
+# enviados pelo "Gerenciar Arquivos" são sempre gravados como
+# quadro_pessoal_auxiliar.<extensão original>.
+# =====================================================
+
+RADICAIS_BASE_PESSOAL <- c("quadro_pessoal_auxiliar", "quadro_pessoal_e_auxiliar")
+ARQUIVO_BASE_PESSOAL <- "quadro_pessoal_auxiliar.xlsx"
+
+# "Quadro pessoal e auxiliar.xlsx" -> "quadro_pessoal_e_auxiliar"
+# (sem extensão, minúsculo, sem acento, separadores viram "_").
+normalizar_nome_arquivo <- function(arquivos) {
+    radical <- tools::file_path_sans_ext(basename(arquivos))
+    radical <- tolower(stringi::stri_trans_general(radical, "Latin-ASCII"))
+    radical <- gsub("[^a-z0-9]+", "_", radical)
+    gsub("^_+|_+$", "", radical)
+}
+
+# O nome do arquivo corresponde ao da base? (critério 1, só pelo nome)
+eh_arquivo_base_pessoal <- function(arquivos) {
+    extensao_arquivo(arquivos) %in% EXTENSOES_PLANILHA &
+        normalizar_nome_arquivo(arquivos) %in% RADICAIS_BASE_PESSOAL
+}
+
+# Separa os arquivos .xlsx/.csv da pasta em base (ordem de prioridade) e
+# alertas (o resto). Ver os critérios no início desta seção.
+arquivos_pessoal <- function(pasta) {
+    
+    vazio <- list(base = character(0), alertas = character(0))
+    
+    if (is.null(pasta) || !dir.exists(pasta)) {
+        return(vazio)
+    }
+    
+    arquivos <- list.files(pasta, full.names = TRUE)
+    arquivos <- arquivos[extensao_arquivo(arquivos) %in% EXTENSOES_PLANILHA]
+    
+    if (length(arquivos) == 0) {
+        return(vazio)
+    }
+    
+    por_nome <- eh_arquivo_base_pessoal(arquivos)
+    
+    if (any(por_nome)) {
+        
+        base <- arquivos[por_nome]
+        base <- base[order(
+            match(normalizar_nome_arquivo(base), RADICAIS_BASE_PESSOAL),
+            match(extensao_arquivo(base), EXTENSOES_PLANILHA)
+        )]
+        
+    } else {
+        
+        tipos <- vapply(
+            arquivos,
+            function(f) identificar_tipo_arquivo_pessoal(
+                suppressWarnings(ler_arquivo_dados(f, n_max = 5))
+            ),
+            character(1),
+            USE.NAMES = FALSE
+        )
+        
+        base <- arquivos[!is.na(tipos) & tipos == "base"]
+        base <- base[order(file.info(base)$mtime, decreasing = TRUE)]
+        
+    }
+    
+    list(base = base, alertas = setdiff(arquivos, base))
+    
+}
+
+# Arquivos da base existentes na pasta, na ordem de prioridade.
+arquivos_base_pessoal <- function(pasta) {
+    arquivos_pessoal(pasta)$base
+}
+
+arquivo_base_pessoal <- function(pasta) {
+    achados <- arquivos_base_pessoal(pasta)
+    if (length(achados) > 0) achados[1] else NULL
+}
+
+# Arquivos de ALERTAS da pasta: .csv/.xlsx que não sejam a base.
+listar_arquivos_alertas_pessoal <- function(pasta) {
+    arquivos_pessoal(pasta)$alertas
+}
+
+carregar_base_pessoal <- function(arquivo) {
+    
+    if (is.null(arquivo) || is.na(arquivo) || !file.exists(arquivo)) {
+        return(data.frame())
+    }
+    
+    limpar_dados_lidos(
+        ler_arquivo_dados(arquivo, aba_preferida = "Quadro pessoal e auxiliar")
+    )
+    
+}
+
+REGEX_COL_CPF <- "^cpf$"
+REGEX_COL_NOME <- "^nome$"
+REGEX_COL_STATUS_PESSOAL <- "^status$"
+REGEX_COL_SITUACAO <- "^situacao profissional"
+REGEX_COL_CARGO <- "^cargo$"
+REGEX_COL_ORGAO <- "^orgao de lotacao"
+REGEX_COL_NATURALIDADE <- "^naturalidade$"
+REGEX_COL_SEXO <- "^sexo$"
+
+# Opções de agrupamento do gráfico da base (rótulo -> regex da coluna).
+AGRUPAMENTOS_BASE_PESSOAL <- c(
+    "Cargo"                        = REGEX_COL_CARGO,
+    "Situação profissional atual"  = REGEX_COL_SITUACAO,
+    "Órgão de lotação"             = REGEX_COL_ORGAO,
+    "Naturalidade"                 = REGEX_COL_NATURALIDADE,
+    "Sexo"                         = REGEX_COL_SEXO,
+    "Status"                       = REGEX_COL_STATUS_PESSOAL
+)
+
+# Identifica o tipo de um arquivo enviado pelas colunas:
+#   - tem CPF e colunas "Alerta..."/"Conflito..."          -> "alertas"
+#   - tem CPF e Situação profissional (ou Status), sem
+#     colunas de alerta                                     -> "base"
+#   - qualquer outra coisa                                  -> NA
+# Evita, por exemplo, gravar o arquivo de Serventias nesta pasta.
+identificar_tipo_arquivo_pessoal <- function(df) {
+    
+    if (is.null(df) || ncol(df) == 0) {
+        return(NA_character_)
+    }
+    
+    names(df) <- limpar_cabecalho(names(df))
+    
+    if (is.null(coluna_por_regex(df, REGEX_COL_CPF))) {
+        return(NA_character_)
+    }
+    
+    tem_alertas <- any(str_starts(names(df), "Alerta") | str_starts(names(df), "Conflito"))
+    
+    if (tem_alertas) {
+        "alertas"
+    } else if (!is.null(coluna_por_regex(df, REGEX_COL_SITUACAO)) ||
+               !is.null(coluna_por_regex(df, REGEX_COL_STATUS_PESSOAL))) {
+        "base"
+    } else {
+        NA_character_
+    }
+    
+}
+
 # =====================================================
 # UI
 # =====================================================
@@ -566,7 +1128,7 @@ mod_alertas_ui <- function(id) {
           justify-content: space-between;
           flex-wrap: wrap;
           gap: 1rem;
-          margin-bottom: 1.5rem;
+          margin-bottom: 1.25rem;
         }
 
         #%1$s .al-titulo {
@@ -605,6 +1167,16 @@ mod_alertas_ui <- function(id) {
           font-weight: 600;
           border-radius: .6rem;
           padding: .55rem 1.1rem;
+        }
+
+        /* Abas principais (Base de Dados / Alertas) */
+        #%1$s .srv-secoes > .nav-tabs {
+          margin-bottom: 1.25rem;
+        }
+
+        #%1$s .srv-secoes > .nav-tabs .nav-link {
+          font-size: 1rem;
+          padding: .6rem 1.1rem;
         }
 
         #%1$s .al-card {
@@ -653,9 +1225,28 @@ mod_alertas_ui <- function(id) {
           margin-bottom: .85rem;
         }
 
-        /* Garante que a tabela ocupe 100%% da largura disponível —
-           autoWidth do DT, combinado com scrollX, às vezes não
-           estica sozinho até a borda do container. */
+        .srv-arquivo-linha {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: .75rem;
+          padding: .6rem .75rem;
+          border: 1px solid #e9ecef;
+          border-radius: .6rem;
+          margin-bottom: .5rem;
+        }
+
+        .srv-arquivo-nome {
+          font-weight: 600;
+          font-size: .9rem;
+        }
+
+        .srv-arquivo-info {
+          font-size: .78rem;
+          color: #6c757d;
+        }
+
+        /* Garante que a tabela ocupe 100%% da largura disponível. */
         #%1$s .dataTables_wrapper,
         #%1$s table.dataTable {
           width: 100%% !important;
@@ -669,7 +1260,7 @@ mod_alertas_ui <- function(id) {
             id = id,
             
             # =================================================
-            # CABEÇALHO - TÍTULO + AÇÕES (mesma linha)
+            # CABEÇALHO - TÍTULO + AÇÕES (valem para as duas abas)
             # =================================================
             
             div(
@@ -677,8 +1268,8 @@ mod_alertas_ui <- function(id) {
                 
                 div(
                     class = "al-titulo",
-                    div(class = "al-titulo-icone", icon("triangle-exclamation")),
-                    tags$h4("Alertas — Quadro Pessoal e Auxiliar")
+                    div(class = "al-titulo-icone", icon("users")),
+                    tags$h4("Quadro de Pessoal e Auxiliar")
                 ),
                 
                 div(
@@ -695,80 +1286,199 @@ mod_alertas_ui <- function(id) {
                         tagList(icon("folder-open", class = "me-2"), "Gerenciar Arquivos"),
                         class = "btn btn-primary btn-acao"
                     )
-                    
                 )
                 
             ),
             
-            # =================================================
-            # FILTROS - EM LINHA, LOGO ABAIXO DO CABEÇALHO
-            # -------------------------------------------------
-            # "Alerta" e "Conflito" se excluem mutuamente (ver
-            # observeEvent(input$alerta)/observeEvent(input$conflito) no
-            # server) — escolher um dos dois volta o outro para "Todos".
-            # =================================================
-            
             div(
-                class = "al-card",
+                class = "srv-secoes",
                 
-                div(class = "al-card-titulo", "Filtros"),
-                
-                fluidRow(
-                    column(4, selectInput(ns("alerta"), "Alerta", choices = c("Todos"), width = "100%")),
-                    column(4, selectInput(ns("conflito"), "Conflito", choices = c("Todos"), width = "100%")),
-                    column(4, selectInput(ns("cargo"), "Cargo", choices = c("Todos"), width = "100%"))
-                ),
-                
-                fluidRow(
-                    column(4, textInput(ns("cpf"), "CPF", width = "100%")),
-                    column(8, textInput(ns("nome"), "Nome", width = "100%"))
-                ),
-                
-                fluidRow(
-                    column(
-                        12,
-                        actionButton(
-                            ns("limpar_filtros"),
-                            tagList(icon("filter-circle-xmark", class = "me-2"), "Limpar Filtros"),
-                            class = "btn btn-outline-secondary btn-sm"
+                tabsetPanel(
+                    id = ns("secao"),
+                    
+                    # =============================================
+                    # ABA 1 — BASE DE DADOS
+                    # =============================================
+                    
+                    tabPanel(
+                        title = tagList(icon("database", class = "me-1"), "Base de Dados - Quadro Pessoal e Auxiliar"),
+                        value = "base",
+                        
+                        div(
+                            class = "al-card",
+                            
+                            div(class = "al-card-titulo", "Filtros"),
+                            
+                            fluidRow(
+                                column(
+                                    2,
+                                    # Começa em "Ativo" (padrão); as demais
+                                    # opções chegam quando o arquivo é lido.
+                                    selectInput(
+                                        ns("base_status"), "Status",
+                                        choices = c("Todos", "Ativo"),
+                                        selected = "Ativo",
+                                        width = "100%"
+                                    )
+                                ),
+                                column(3, textInput(ns("base_cpf"), "CPF", width = "100%")),
+                                column(7, textInput(ns("base_nome"), "Nome", width = "100%"))
+                            ),
+                            
+                            fluidRow(
+                                column(
+                                    6,
+                                    selectInput(ns("base_cargo"), "Cargo", choices = c("Todos"), width = "100%")
+                                ),
+                                column(
+                                    6,
+                                    selectInput(
+                                        ns("base_situacao"), "Situação profissional atual",
+                                        choices = c("Todos"), width = "100%"
+                                    )
+                                )
+                            ),
+                            
+                            fluidRow(
+                                column(
+                                    12,
+                                    textInput(
+                                        ns("base_detalhe"), "Detalhe",
+                                        placeholder = "Procura o texto digitado em todas as colunas da tabela",
+                                        width = "100%"
+                                    )
+                                )
+                            ),
+                            
+                            fluidRow(
+                                column(
+                                    12,
+                                    actionButton(
+                                        ns("base_limpar_filtros"),
+                                        tagList(icon("filter-circle-xmark", class = "me-2"), "Limpar Filtros"),
+                                        class = "btn btn-outline-secondary btn-sm"
+                                    )
+                                )
+                            )
+                        ),
+                        
+                        div(
+                            class = "al-conteudo",
+                            
+                            tabsetPanel(
+                                tabPanel(
+                                    tagList(icon("table", class = "me-1"), "Tabela"),
+                                    DTOutput(ns("base_tabela"))
+                                ),
+                                tabPanel(
+                                    tagList(icon("chart-column", class = "me-1"), "Gráfico"),
+                                    
+                                    fluidRow(
+                                        class = "mt-3",
+                                        column(
+                                            4,
+                                            selectInput(
+                                                ns("base_grafico_agrupar"), "Agrupar por",
+                                                choices = names(AGRUPAMENTOS_BASE_PESSOAL),
+                                                selected = "Cargo",
+                                                width = "100%"
+                                            )
+                                        ),
+                                        column(
+                                            4,
+                                            selectInput(
+                                                ns("base_grafico_qtd"), "Exibir",
+                                                choices = c(
+                                                    "Os 20 maiores grupos" = "20",
+                                                    "Os 50 maiores grupos" = "50",
+                                                    "Todos os grupos" = "0"
+                                                ),
+                                                selected = "20",
+                                                width = "100%"
+                                            )
+                                        )
+                                    ),
+                                    
+                                    girafeOutput(ns("base_grafico"))
+                                ),
+                                tabPanel(
+                                    tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
+                                    uiOutput(ns("base_csv_ui"))
+                                )
+                            )
+                        )
+                    ),
+                    
+                    # =============================================
+                    # ABA 2 — ALERTAS
+                    # -------------------------------------------------
+                    # "Alerta" e "Conflito" se excluem mutuamente (ver
+                    # observeEvent(input$alerta)/observeEvent(input$conflito)
+                    # no server) — escolher um volta o outro para "Todos".
+                    # =============================================
+                    
+                    tabPanel(
+                        title = tagList(icon("triangle-exclamation", class = "me-1"), "Alertas - Quadro Pessoal e Auxiliar"),
+                        value = "alertas",
+                        
+                        div(
+                            class = "al-card",
+                            
+                            div(class = "al-card-titulo", "Filtros"),
+                            
+                            fluidRow(
+                                column(4, selectInput(ns("alerta"), "Alerta", choices = c("Todos"), width = "100%")),
+                                column(4, selectInput(ns("conflito"), "Conflito", choices = c("Todos"), width = "100%")),
+                                column(4, selectInput(ns("cargo"), "Cargo", choices = c("Todos"), width = "100%"))
+                            ),
+                            
+                            fluidRow(
+                                column(4, textInput(ns("cpf"), "CPF", width = "100%")),
+                                column(8, textInput(ns("nome"), "Nome", width = "100%"))
+                            ),
+                            
+                            fluidRow(
+                                column(
+                                    12,
+                                    actionButton(
+                                        ns("limpar_filtros"),
+                                        tagList(icon("filter-circle-xmark", class = "me-2"), "Limpar Filtros"),
+                                        class = "btn btn-outline-secondary btn-sm"
+                                    )
+                                )
+                            )
+                        ),
+                        
+                        div(
+                            class = "al-conteudo",
+                            
+                            tabsetPanel(
+                                tabPanel(
+                                    tagList(icon("table", class = "me-1"), "Tabela"),
+                                    DTOutput(ns("tabela"))
+                                ),
+                                tabPanel(
+                                    tagList(icon("chart-column", class = "me-1"), "Gráfico"),
+                                    
+                                    # 1) Tipo de Alerta/Conflito (echarts4r) — altura
+                                    #    acompanha a quantidade de barras.
+                                    uiOutput(ns("grafico_ui")),
+                                    
+                                    tags$hr(class = "my-4"),
+                                    
+                                    # 2) Registros por Cargo (ggiraph)
+                                    girafeOutput(ns("grafico_cargo"))
+                                ),
+                                tabPanel(
+                                    tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
+                                    uiOutput(ns("csv_ui"))
+                                )
+                            )
                         )
                     )
                 )
-                
-            ),
-            
-            # =================================================
-            # CONTEÚDO - TABELA / GRÁFICO / CSV
-            # =================================================
-            
-            div(
-                class = "al-conteudo",
-                
-                tabsetPanel(
-                    tabPanel(tagList(icon("table", class = "me-1"), "Tabela"), DTOutput(ns("tabela"))),
-                    tabPanel(
-                        tagList(icon("chart-column", class = "me-1"), "Gráfico"),
-                        
-                        # 1) Tipo de Alerta/Conflito (echarts4r) — em um uiOutput
-                        #    porque a altura acompanha a quantidade de barras.
-                        uiOutput(ns("grafico_ui")),
-                        
-                        tags$hr(class = "my-4"),
-                        
-                        # 2) Registros por Cargo (ggiraph)
-                        girafeOutput(ns("grafico_cargo"))
-                    ),
-                    tabPanel(
-                        tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
-                        
-                        uiOutput(ns("csv_ui"))
-                    )
-                )
-                
             )
-            
         )
-        
     )
     
 }
@@ -783,8 +1493,7 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
         ns <- session$ns
         
         # Garante as tabelas auxiliares (Situação Profissional / Cargo) no
-        # SQLite do app — a mesma conexão `con` usada no controle de acesso
-        # (usuarios_totp). Idempotente. Um erro aqui não pode derrubar o
+        # SQLite do app. Idempotente. Um erro aqui não pode derrubar o
         # módulo: sem as tabelas, a exibição só mostra os códigos originais.
         if (!is.null(con)) {
             tryCatch(
@@ -795,22 +1504,28 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
             )
         }
         
-        # Começa vazio: a empresa (distro) só é conhecida depois do login,
-        # então o carregamento real acontece no observeEvent(empresa())
-        # logo abaixo — nunca aqui na inicialização do módulo.
-        dados <- reactiveVal(data.frame())
+        # Começam vazios: a empresa só é conhecida depois do login.
+        dados_base <- reactiveVal(data.frame())   # quadro_pessoal_auxiliar.xlsx
+        dados <- reactiveVal(data.frame())        # arquivos de alertas
+        
+        empresa_definida <- function() {
+            e <- empresa()
+            !is.null(e) && !is.na(e) && trimws(e) != ""
+        }
+        
+        recarregar <- function() {
+            pasta <- caminho_alertas(empresa())
+            arquivos <- arquivos_pessoal(pasta)
+            dados_base(carregar_base_pessoal(arquivos$base[1]))
+            dados(carregar_alertas(pasta, arquivos$alertas))
+        }
         
         # ----------------------------------------
-        # CONTADOR DO CAMPO DE UPLOAD (modal "Gerenciar Arquivos")
+        # CONTADOR DO CAMPO DE UPLOAD
         # -----------------------------------------------------
-        # O fileInput() do modal usa um ID novo (ns("upload_arquivos_N"))
-        # toda vez que o modal é aberto, em vez de um ID fixo. Sem isso, o
-        # Shiny não garante que a seleção de arquivos do input$ fique vazia
-        # ao reabrir o modal — o valor antigo pode continuar "vivo" no
-        # servidor mesmo com o campo aparentando estar limpo na tela,
-        # fazendo "Enviar para Pasta" reenviar os arquivos de uma seleção
-        # anterior mesmo sem nada escolhido dessa vez. Um ID novo a cada
-        # abertura elimina esse problema de vez.
+        # O fileInput() do modal usa um ID novo a cada abertura. Sem isso,
+        # o Shiny não garante que a seleção anterior fique vazia ao reabrir
+        # o modal, e "Enviar para Pasta" poderia reenviar arquivos antigos.
         # ----------------------------------------
         contador_upload <- reactiveVal(0)
         
@@ -823,65 +1538,85 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
         }
         
         # ----------------------------------------
-        # CARREGA DADOS DA EMPRESA ATUAL
-        # -----------------------------------------
-        # Dispara na primeira empresa disponível (login) e sempre que ela
-        # mudar (ex.: logout seguido de novo login de outra empresa, na
-        # mesma sessão do navegador — este módulo não é recriado a cada
-        # login).
+        # CARREGA DADOS DA EMPRESA ATUAL (login / troca de empresa)
         # ----------------------------------------
         
         observeEvent(empresa(), {
             req(empresa())
-            
-            dados(
-                carregar_alertas(
-                    caminho_alertas(empresa())
-                )
-            )
+            recarregar()
         }, ignoreInit = FALSE)
         
-        # ----------------------------------------
-        # ATUALIZA OS COMBOS (Alerta / Conflito)
-        # — reage a dados() E a ativo(), preservando a seleção atual quando
-        # ainda fizer sentido (mesmo padrão dos outros módulos).
-        # ----------------------------------------
+        # =================================================
+        # BASE — EXIBIÇÃO (códigos -> nomenclatura)
+        # -------------------------------------------------
+        # Mesmas colunas e ordem do arquivo; só "Situação profissional
+        # atual" e "Cargo" passam de código para nomenclatura (tabelas
+        # auxiliares do SQLite), como na aba de alertas. Filtros, busca
+        # Detalhe, gráfico e CSV usam esta versão — assim, digitar
+        # "Aposentado" no Detalhe encontra os registros.
+        # =================================================
+        
+        base_exibicao <- reactive({
+            traduzir_codigos_tabela(dados_base(), con)
+        })
+        
+        # =================================================
+        # COMBOS
+        # =================================================
+        
+        # Opções de Status da base na última atualização: quando o arquivo
+        # passa de "sem dados" para "com dados" (primeiro envio, troca de
+        # empresa), o Status volta ao padrão "Ativo".
+        status_base_anterior <- character(0)
+        
+        atualizar_combos_base <- function() {
+            
+            df <- base_exibicao()
+            
+            status <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_STATUS_PESSOAL))
+            cargos <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_CARGO))
+            situacoes <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_SITUACAO))
+            
+            status_atual <- if (length(status_base_anterior) == 0) "Ativo" else input$base_status
+            status_base_anterior <<- status
+            
+            updateSelectInput(
+                session, "base_status",
+                choices = c("Todos", status),
+                selected = selecao_valida(status_atual, status, padrao = "Ativo")
+            )
+            
+            updateSelectInput(
+                session, "base_cargo",
+                choices = c("Todos", cargos),
+                selected = selecao_valida(input$base_cargo, cargos)
+            )
+            
+            updateSelectInput(
+                session, "base_situacao",
+                choices = c("Todos", situacoes),
+                selected = selecao_valida(input$base_situacao, situacoes)
+            )
+            
+        }
         
         atualizar_combos <- function() {
             
             df <- dados()
             
-            alerta_atual <- input$alerta
-            conflito_atual <- input$conflito
-            cargo_atual <- input$cargo
-            
             colunas_alerta <- colunas_com_dados(df, colunas_por_prefixo(df, "Alerta"))
             colunas_conflito <- colunas_com_dados(df, colunas_por_prefixo(df, "Conflito"))
             
-            alerta_selecionado <- if (!is.null(alerta_atual) && alerta_atual %in% colunas_alerta) {
-                alerta_atual
-            } else {
-                "Todos"
-            }
-            
-            conflito_selecionado <- if (!is.null(conflito_atual) && conflito_atual %in% colunas_conflito) {
-                conflito_atual
-            } else {
-                "Todos"
-            }
-            
             updateSelectInput(
-                session,
-                "alerta",
+                session, "alerta",
                 choices = c("Todos", colunas_alerta),
-                selected = alerta_selecionado
+                selected = selecao_valida(input$alerta, colunas_alerta)
             )
             
             updateSelectInput(
-                session,
-                "conflito",
+                session, "conflito",
                 choices = c("Todos", colunas_conflito),
-                selected = conflito_selecionado
+                selected = selecao_valida(input$conflito, colunas_conflito)
             )
             
             # Cargo: opções por extenso (nomenclatura), em ordem alfabética,
@@ -892,32 +1627,30 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                 intersect(ROTULO_CARGO_VAZIO, cargos)
             )
             
-            cargo_selecionado <- if (!is.null(cargo_atual) && cargo_atual %in% cargos) {
-                cargo_atual
-            } else {
-                "Todos"
-            }
-            
             updateSelectInput(
-                session,
-                "cargo",
+                session, "cargo",
                 choices = c("Todos", cargos),
-                selected = cargo_selecionado
+                selected = selecao_valida(input$cargo, cargos)
             )
             
         }
         
-        observeEvent(list(dados(), ativo()), {
-            req(ativo())
+        atualizar_todos_combos <- function() {
+            atualizar_combos_base()
             atualizar_combos()
+        }
+        
+        observeEvent(list(dados_base(), dados(), ativo()), {
+            req(ativo())
+            atualizar_todos_combos()
         }, ignoreInit = FALSE)
         
         observeEvent(input$atualizar, {
             req(empresa())
             inicio <- Sys.time()
             
-            dados(carregar_alertas(caminho_alertas(empresa())))
-            atualizar_combos()
+            recarregar()
+            atualizar_todos_combos()
             
             showNotification(
                 sprintf("Dados atualizados em %.2fs.", tempo_decorrido(inicio)),
@@ -928,6 +1661,17 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
         # ----------------------------------------
         # LIMPAR FILTROS
         # ----------------------------------------
+        
+        # Base: Status volta ao padrão "Ativo" (não para "Todos").
+        observeEvent(input$base_limpar_filtros, {
+            status <- opcoes_combo(valores_coluna_regex(base_exibicao(), REGEX_COL_STATUS_PESSOAL))
+            updateSelectInput(session, "base_status", selected = selecao_valida("Ativo", status))
+            updateTextInput(session, "base_cpf", value = "")
+            updateTextInput(session, "base_nome", value = "")
+            updateSelectInput(session, "base_cargo", selected = "Todos")
+            updateSelectInput(session, "base_situacao", selected = "Todos")
+            updateTextInput(session, "base_detalhe", value = "")
+        })
         
         observeEvent(input$limpar_filtros, {
             updateSelectInput(session, "alerta", selected = "Todos")
@@ -943,37 +1687,35 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
         
         observeEvent(input$alerta, {
             req(input$alerta)
-            
-            if (input$alerta != "Todos" &&
-                !is.null(input$conflito) &&
-                input$conflito != "Todos") {
+            if (input$alerta != "Todos" && !is.null(input$conflito) && input$conflito != "Todos") {
                 updateSelectInput(session, "conflito", selected = "Todos")
             }
         }, ignoreInit = TRUE)
         
         observeEvent(input$conflito, {
             req(input$conflito)
-            
-            if (input$conflito != "Todos" &&
-                !is.null(input$alerta) &&
-                input$alerta != "Todos") {
+            if (input$conflito != "Todos" && !is.null(input$alerta) && input$alerta != "Todos") {
                 updateSelectInput(session, "alerta", selected = "Todos")
             }
         }, ignoreInit = TRUE)
         
-        # ----------------------------------------
-        # MODAL "GERENCIAR ARQUIVOS"
-        #
-        # Reúne, em uma única janela, as opções
-        # "Apagar Arquivos da Pasta" e "Enviar para Pasta",
-        # acessadas pelo botão ao lado de "Atualizar Dados".
-        # ----------------------------------------
+        # =================================================
+        # GERENCIAR ARQUIVOS (comum às duas abas)
+        # -------------------------------------------------
+        # Mostra a base e os arquivos de alertas da pasta, com um botão
+        # Apagar para cada grupo, e envia vários arquivos de uma vez. O
+        # tipo de cada arquivo enviado é identificado pelas colunas
+        # (identificar_tipo_arquivo_pessoal):
+        #   - base    -> gravada como quadro_pessoal_auxiliar.<ext>,
+        #                substituindo a anterior;
+        #   - alertas -> gravados com o nome original (podem ser vários);
+        #                se já houver alertas na pasta, pergunta se mantém
+        #                ou apaga os existentes (como antes).
+        # =================================================
         
         observeEvent(input$gerenciar_arquivos, {
             
-            # Antes: req(empresa()) — sem empresa definida, o clique era
-            # descartado em silêncio e o botão parecia "não funcionar".
-            if (is.null(empresa()) || is.na(empresa()) || trimws(empresa()) == "") {
+            if (!empresa_definida()) {
                 showNotification(
                     "Nenhuma empresa definida para esta sessão. Faça login novamente (ou use \"Trocar empresa\").",
                     type = "error",
@@ -982,30 +1724,21 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                 return(invisible(NULL))
             }
             
-            cam <- caminho_alertas(empresa())
+            pasta <- caminho_alertas(empresa())
+            arquivos <- arquivos_pessoal(pasta)
+            bases <- arquivos$base
+            alertas <- arquivos$alertas
             
-            total_arquivos <- if (!is.null(cam) && dir.exists(cam)) {
-                length(list.files(cam))
-            } else {
-                0
-            }
-            
-            # ID novo do fileInput a cada abertura — ver comentário em
-            # contador_upload(), acima.
             contador_upload(contador_upload() + 1)
             
             showModal(modalDialog(
                 title = div(
                     style = "position:relative; padding-right:28px;",
                     icon("folder-open", class = "me-2"),
-                    sprintf("Gerenciar Arquivos de Alertas — %s", empresa()),
+                    sprintf("Gerenciar Arquivos do Quadro de Pessoal — %s", empresa()),
                     
-                    # X próprio no canto superior direito do título. Usa
-                    # Shiny.setInputValue() diretamente (em vez do fechamento
-                    # padrão do Bootstrap via data-dismiss/data-bs-dismiss) para
-                    # garantir que funcione independentemente da versão do
-                    # Bootstrap usada pelo tema — o mesmo observeEvent de baixo
-                    # cuida do fechamento, junto com o botão "Fechar" do rodapé.
+                    # X próprio no canto superior direito — ver comentário
+                    # equivalente em titulo_modal() (app.R).
                     tags$button(
                         type = "button",
                         class = "btn-close",
@@ -1025,25 +1758,73 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                     
                     div(
                         class = "al-modal-secao-titulo",
-                        icon("trash", class = "text-danger"),
-                        "Apagar arquivos da pasta"
+                        icon("folder", class = "text-secondary"),
+                        "Arquivos na pasta"
                     ),
                     
+                    # Base de dados
                     div(
-                        class = "al-modal-secao-desc",
-                        if (total_arquivos > 0) {
-                            sprintf("A pasta contém atualmente %d arquivo(s).", total_arquivos)
-                        } else {
-                            "A pasta de alertas está vazia."
+                        class = "srv-arquivo-linha",
+                        div(
+                            div(
+                                class = "srv-arquivo-nome",
+                                icon(if (length(bases) > 0 && extensao_arquivo(bases[1]) == "xlsx") "file-excel" else "file-csv", class = "me-1"),
+                                if (length(bases) > 0) basename(bases[1]) else "quadro_pessoal_auxiliar.xlsx / .csv"
+                            ),
+                            div(
+                                class = "srv-arquivo-info",
+                                "Base de Dados — ",
+                                if (length(bases) > 0) {
+                                    sprintf("atualizado em %s", format(file.info(bases[1])$mtime, "%d/%m/%Y %H:%M"))
+                                } else {
+                                    "ainda não enviado"
+                                },
+                                if (length(bases) > 1) {
+                                    tags$div(
+                                        class = "text-warning",
+                                        sprintf("também na pasta (ignorado): %s", paste(basename(bases[-1]), collapse = ", "))
+                                    )
+                                }
+                            )
+                        ),
+                        if (length(bases) > 0) {
+                            actionButton(
+                                ns("apagar_base"),
+                                tagList(icon("trash", class = "me-1"), "Apagar"),
+                                class = "btn btn-outline-danger btn-sm"
+                            )
                         }
                     ),
                     
-                    actionButton(
-                        ns("apagar_pasta"),
-                        tagList(icon("trash", class = "me-2"), "Apagar Arquivos da Pasta"),
-                        class = "btn btn-danger w-100"
+                    # Alertas
+                    div(
+                        class = "srv-arquivo-linha",
+                        div(
+                            div(
+                                class = "srv-arquivo-nome",
+                                icon("file-csv", class = "me-1"),
+                                sprintf("%d arquivo(s) de alertas", length(alertas))
+                            ),
+                            div(
+                                class = "srv-arquivo-info",
+                                if (length(alertas) > 0) {
+                                    paste(
+                                        c(head(basename(alertas), 5), if (length(alertas) > 5) sprintf("... e mais %d", length(alertas) - 5)),
+                                        collapse = ", "
+                                    )
+                                } else {
+                                    "nenhum arquivo de alertas na pasta"
+                                }
+                            )
+                        ),
+                        if (length(alertas) > 0) {
+                            actionButton(
+                                ns("apagar_alertas"),
+                                tagList(icon("trash", class = "me-1"), "Apagar"),
+                                class = "btn btn-outline-danger btn-sm"
+                            )
+                        }
                     )
-                    
                 ),
                 
                 tags$hr(),
@@ -1058,9 +1839,13 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                     
                     div(
                         class = "al-modal-secao-desc",
-                        "Selecione um ou mais arquivos CSV de alertas (quadro ",
-                        "pessoal e auxiliar) — cabem vários de uma vez (limite de ",
-                        MAX_UPLOAD_MB, " MB no total por envio)."
+                        "Selecione a base do Quadro de Pessoal e Auxiliar e/ou arquivos de ",
+                        "alertas gerados pelo MPM, em ", tags$b(".xlsx"), " ou ", tags$b(".csv"),
+                        " (limite de ", MAX_UPLOAD_MB, " MB no total por envio). O tipo é ",
+                        "identificado pelas colunas: com colunas \"Alerta: ...\" o arquivo ",
+                        "entra nos alertas (com o nome original); sem alertas, é a base, ",
+                        "gravada como ", tags$code("quadro_pessoal_auxiliar"),
+                        " com a extensão original, substituindo a anterior."
                     ),
                     
                     div(
@@ -1075,7 +1860,10 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                         ns(id_upload_atual()),
                         NULL,
                         multiple = TRUE,
-                        accept = c(".csv", "text/csv"),
+                        accept = c(
+                            ".csv", ".xlsx", "text/csv",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        ),
                         width = "100%",
                         buttonLabel = "Procurar...",
                         placeholder = "Nenhum arquivo selecionado"
@@ -1086,273 +1874,517 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                         tagList(icon("upload", class = "me-2"), "Enviar para Pasta"),
                         class = "btn btn-primary w-100"
                     )
-                    
                 ),
                 
                 footer = actionButton(ns("fechar_modal_alertas"), "Fechar")
-                
             ))
             
         })
         
-        # Fecha o modal "Gerenciar Arquivos" — usado tanto pelo X do
-        # cabeçalho quanto pelo botão "Fechar" do rodapé (ver acima). Não é
-        # preciso limpar o fileInput aqui: o próximo input$gerenciar_arquivos
-        # já gera um ID novo para ele (ver contador_upload(), no início do
-        # server), então a seleção anterior nunca reaparece.
         observeEvent(input$fechar_modal_alertas, {
             removeModal()
             session$sendCustomMessage("limpar-modal-backdrop", list())
         })
         
         # ----------------------------------------
-        # APAGAR ARQUIVOS DA PASTA (BOTÃO INDEPENDENTE)
+        # APAGAR (base ou todos os arquivos de alertas)
         # ----------------------------------------
         
-        apagar_pasta_alertas <- function() {
+        tipo_para_apagar <- reactiveVal(NULL)
+        
+        arquivos_do_grupo <- function(tipo) {
+            pasta <- caminho_alertas(empresa())
+            if (identical(tipo, "base")) arquivos_base_pessoal(pasta) else listar_arquivos_alertas_pessoal(pasta)
+        }
+        
+        rotulo_do_grupo <- function(tipo) {
+            if (identical(tipo, "base")) "Base de Dados - Quadro Pessoal e Auxiliar" else "Alertas - Quadro Pessoal e Auxiliar"
+        }
+        
+        pedir_confirmacao_apagar <- function(tipo) {
+            req(empresa())
+            
+            existentes <- arquivos_do_grupo(tipo)
+            
+            if (length(existentes) == 0) {
+                showNotification(sprintf("Não há arquivos de %s na pasta.", rotulo_do_grupo(tipo)), type = "warning")
+                return(invisible(NULL))
+            }
+            
+            tipo_para_apagar(tipo)
+            
+            # Fecha o modal "Gerenciar Arquivos" ANTES de abrir a
+            # confirmação — trocar um modal por outro na hora pode deixar o
+            # backdrop do Bootstrap "grudado" na tela.
+            removeModal()
+            
+            showModal(modalDialog(
+                title = "Confirmar exclusão",
+                sprintf(
+                    "Tem certeza que deseja apagar %d arquivo(s) de %s da empresa %s? Esta ação não pode ser desfeita.",
+                    length(existentes), rotulo_do_grupo(tipo), empresa()
+                ),
+                footer = tagList(
+                    modalButton("Cancelar"),
+                    actionButton(ns("confirmar_apagar"), "Apagar", class = "btn-danger")
+                )
+            ))
+        }
+        
+        observeEvent(input$apagar_base, pedir_confirmacao_apagar("base"))
+        observeEvent(input$apagar_alertas, pedir_confirmacao_apagar("alertas"))
+        
+        observeEvent(input$confirmar_apagar, {
+            removeModal()
+            session$sendCustomMessage("limpar-modal-backdrop", list())
+            
+            req(empresa(), tipo_para_apagar())
+            
+            tipo <- tipo_para_apagar()
+            tipo_para_apagar(NULL)
+            
             inicio <- Sys.time()
+            existentes <- arquivos_do_grupo(tipo)
             
-            cam <- if (!is.null(empresa())) caminho_alertas(empresa()) else NULL
-            
-            if (is.null(cam) || !dir.exists(cam)) {
-                showNotification(
-                    "Não foi possível determinar a pasta de alertas da empresa atual.",
-                    type = "error"
-                )
-                return(invisible(NULL))
+            if (length(existentes) == 0) {
+                showNotification(sprintf("Não há arquivos de %s na pasta.", rotulo_do_grupo(tipo)), type = "warning")
+                return()
             }
             
-            arquivos_atuais <- list.files(cam, full.names = TRUE)
+            removidos <- tryCatch(
+                file.remove(existentes),
+                error = function(e) {
+                    showNotification(sprintf("Erro ao apagar arquivos: %s", conditionMessage(e)), type = "error")
+                    NULL
+                }
+            )
             
-            if (length(arquivos_atuais) == 0) {
-                showNotification("A pasta já está vazia.", type = "warning")
-                return(invisible(NULL))
+            if (is.null(removidos)) {
+                return()
             }
             
-            resultado <- tryCatch({
-                removidos <- file.remove(arquivos_atuais)
-                list(ok = TRUE, removidos = removidos)
-            }, error = function(e) {
-                list(ok = FALSE, erro = conditionMessage(e))
-            })
-            
-            if (!resultado$ok) {
-                showNotification(
-                    sprintf("Erro ao apagar arquivos: %s", resultado$erro),
-                    type = "error"
-                )
-                return(invisible(NULL))
-            }
-            
-            removidos <- resultado$removidos
             if (all(removidos)) {
                 showNotification(
-                    sprintf(
-                        "%d arquivo(s) apagado(s) da pasta em %.2fs.",
-                        length(arquivos_atuais),
-                        tempo_decorrido(inicio)
-                    ),
+                    sprintf("%d arquivo(s) apagado(s) em %.2fs.", length(existentes), tempo_decorrido(inicio)),
                     type = "message"
                 )
             } else {
                 showNotification(
                     sprintf(
                         "%d de %d arquivo(s) não puderam ser apagados (verifique se estão abertos em outro programa).",
-                        sum(!removidos),
-                        length(removidos)
+                        sum(!removidos), length(removidos)
                     ),
                     type = "error"
                 )
             }
             
             tryCatch({
-                dados(carregar_alertas(cam))
-                atualizar_combos()
+                recarregar()
+                atualizar_todos_combos()
             }, error = function(e) {
                 showNotification(
-                    sprintf("Arquivos apagados, mas houve erro ao recarregar a tabela: %s", conditionMessage(e)),
+                    sprintf("Arquivos apagados, mas houve erro ao recarregar: %s", conditionMessage(e)),
                     type = "error"
+                )
+            })
+        })
+        
+        # ----------------------------------------
+        # UPLOAD
+        # ----------------------------------------
+        
+        # Arquivos já validados, aguardando confirmação.
+        upload_pendente <- reactiveVal(NULL)
+        
+        # Copia os arquivos para a pasta "pessoal" da empresa. Fecha o modal
+        # logo depois de copiar (rápido) — ANTES de recarregar os dados,
+        # que pode demorar com a base grande.
+        processar_upload <- function(pendente, apagar_alertas_existentes = FALSE) {
+            req(pendente, empresa())
+            
+            pasta <- caminho_alertas(empresa())
+            req(pasta)
+            
+            inicio <- Sys.time()
+            
+            removeModal()
+            session$sendCustomMessage("limpar-modal-backdrop", list())
+            
+            if (apagar_alertas_existentes && any(pendente$tipo == "alertas")) {
+                anteriores <- listar_arquivos_alertas_pessoal(pasta)
+                if (length(anteriores) > 0) {
+                    file.remove(anteriores)
+                }
+            }
+            
+            gravados <- character(0)
+            
+            for (i in seq_len(nrow(pendente))) {
+                
+                if (pendente$tipo[i] == "base") {
+                    
+                    # Remove a base anterior em QUALQUER formato — senão um
+                    # .xlsx antigo continuaria com prioridade sobre um .csv
+                    # novo.
+                    anteriores <- arquivos_base_pessoal(pasta)
+                    if (length(anteriores) > 0) {
+                        file.remove(anteriores)
+                    }
+                    
+                    destino <- paste0(RADICAIS_BASE_PESSOAL[1], ".", pendente$extensao[i])
+                    
+                } else {
+                    
+                    # Alertas mantêm o nome original — exceto se o nome for
+                    # o reservado para a base.
+                    destino <- pendente$name[i]
+                    if (eh_arquivo_base_pessoal(destino)) {
+                        destino <- paste0("alertas_", destino)
+                    }
+                    
+                }
+                
+                if (isTRUE(file.copy(pendente$datapath[i], file.path(pasta, destino), overwrite = TRUE))) {
+                    gravados <- c(gravados, destino)
+                } else {
+                    showNotification(
+                        sprintf("O arquivo %s não pôde ser copiado para a pasta.", pendente$name[i]),
+                        type = "error"
+                    )
+                }
+            }
+            
+            if (length(gravados) > 0) {
+                showNotification(
+                    sprintf(
+                        "%d arquivo(s) enviado(s) em %.2fs: %s. Atualizando as tabelas...",
+                        length(gravados), tempo_decorrido(inicio), paste(gravados, collapse = ", ")
+                    ),
+                    type = "message",
+                    duration = 8
+                )
+            }
+            
+            upload_pendente(NULL)
+            
+            tryCatch({
+                recarregar()
+                atualizar_todos_combos()
+            }, error = function(e) {
+                showNotification(
+                    sprintf("Arquivos enviados, mas houve erro ao recarregar as tabelas: %s", conditionMessage(e)),
+                    type = "error",
+                    duration = 15
                 )
             })
         }
         
-        observeEvent(input$apagar_pasta, {
-            req(empresa())
+        observeEvent(input$enviar_arquivos, {
+            up <- entrada_upload_atual()
+            req(up, empresa())
             
-            cam <- caminho_alertas(empresa())
+            extensoes <- extensao_arquivo(up$name)
             
-            if (is.null(cam) || !dir.exists(cam)) {
+            tipos <- vapply(
+                seq_len(nrow(up)),
+                function(i) {
+                    if (!(extensoes[i] %in% EXTENSOES_PLANILHA)) {
+                        return(NA_character_)
+                    }
+                    identificar_tipo_arquivo_pessoal(
+                        ler_arquivo_dados(up$datapath[i], extensoes[i], up$name[i], n_max = 5)
+                    )
+                },
+                character(1)
+            )
+            
+            invalidos <- up$name[is.na(tipos)]
+            
+            if (length(invalidos) > 0) {
                 showNotification(
-                    "Não foi possível determinar a pasta de alertas da empresa atual.",
-                    type = "error"
+                    sprintf(
+                        "Não reconhecido(s) como base ou alertas do Quadro de Pessoal em .xlsx ou .csv (ignorado[s]): %s.",
+                        paste(invalidos, collapse = ", ")
+                    ),
+                    type = "error",
+                    duration = 12
                 )
-                return()
             }
             
-            arquivos_existentes <- list.files(cam)
+            validos <- !is.na(tipos)
             
-            if (length(arquivos_existentes) == 0) {
-                showNotification("A pasta já está vazia.", type = "warning")
-                return()
+            if (!any(validos)) {
+                return(invisible(NULL))
             }
             
-            # Fecha o modal "Gerenciar Arquivos" (de onde este botão foi
-            # clicado) ANTES de abrir o de confirmação, em vez de deixar o
-            # showModal() abaixo substituir um modal ainda aberto na hora —
-            # essa troca instantânea de modal por modal é a causa mais
-            # provável de a tela travar (backdrop do Bootstrap ficando
-            # "grudado") especificamente nessa ação.
+            if (sum(tipos[validos] == "base") > 1) {
+                showNotification(
+                    "Foram selecionadas duas bases do Quadro de Pessoal. Envie apenas uma por vez.",
+                    type = "error",
+                    duration = 12
+                )
+                return(invisible(NULL))
+            }
+            
+            pendente <- data.frame(
+                name = up$name[validos],
+                datapath = up$datapath[validos],
+                tipo = tipos[validos],
+                extensao = extensoes[validos],
+                stringsAsFactors = FALSE
+            )
+            
+            upload_pendente(pendente)
+            
+            pasta <- caminho_alertas(empresa())
+            
+            substitui_base <- any(pendente$tipo == "base") && length(arquivos_base_pessoal(pasta)) > 0
+            alertas_existentes <- if (any(pendente$tipo == "alertas")) listar_arquivos_alertas_pessoal(pasta) else character(0)
+            
+            if (!substitui_base && length(alertas_existentes) == 0) {
+                processar_upload(pendente)
+                return(invisible(NULL))
+            }
+            
+            # Fecha o modal "Gerenciar Arquivos" ANTES de abrir a
+            # confirmação (mesma correção do Apagar). O valor do fileInput
+            # continua acessível depois disso.
             removeModal()
             
             showModal(modalDialog(
-                title = "Confirmar exclusão",
-                sprintf(
-                    "Tem certeza que deseja apagar os %d arquivo(s) da pasta de alertas da empresa %s? Esta ação não pode ser desfeita.",
-                    length(arquivos_existentes),
-                    empresa()
-                ),
+                title = "Arquivos existentes na pasta",
+                
+                if (substitui_base) {
+                    p(sprintf(
+                        "A base atual (%s) será substituída pela base enviada.",
+                        basename(arquivos_base_pessoal(pasta)[1])
+                    ))
+                },
+                
+                if (length(alertas_existentes) > 0) {
+                    p(sprintf(
+                        "A pasta da empresa %s já contém %d arquivo(s) de alertas. Deseja apagar os existentes antes de enviar os novos, ou manter os dois conjuntos?",
+                        empresa(), length(alertas_existentes)
+                    ))
+                },
+                
                 footer = tagList(
                     modalButton("Cancelar"),
-                    actionButton(ns("confirmar_apagar_pasta"), "Apagar", class = "btn-danger")
+                    if (length(alertas_existentes) > 0) {
+                        tagList(
+                            actionButton(ns("enviar_manter"), "Manter Alertas Existentes"),
+                            actionButton(ns("enviar_apagar"), "Apagar Alertas e Enviar", class = "btn-danger")
+                        )
+                    } else {
+                        actionButton(ns("enviar_manter"), "Substituir", class = "btn-danger")
+                    }
                 )
             ))
         })
         
-        observeEvent(input$confirmar_apagar_pasta, {
-            removeModal()
-            session$sendCustomMessage("limpar-modal-backdrop", list())
-            apagar_pasta_alertas()
+        observeEvent(input$enviar_manter, {
+            processar_upload(upload_pendente(), apagar_alertas_existentes = FALSE)
         })
         
-        # ----------------------------------------
-        # UPLOAD DE ARQUIVOS PARA A PASTA DA EMPRESA ATUAL
-        # ----------------------------------------
+        observeEvent(input$enviar_apagar, {
+            processar_upload(upload_pendente(), apagar_alertas_existentes = TRUE)
+        })
         
-        # Copia os arquivos enviados para a pasta de alertas da empresa
-        # atual (caminho_alertas(empresa())), apagando os existentes antes
-        # se `apagar_existentes = TRUE`.
-        #
-        # Fecha o modal "Gerenciar Arquivos" logo depois de copiar os
-        # arquivos (rápido) — ANTES de recarregar a tabela, que pode
-        # demorar com muitos arquivos. Fazer isso na ordem inversa deixava
-        # o modal parado na tela, sem retorno visual, dando a impressão de
-        # que a aplicação tinha travado. O recarregamento fica dentro de
-        # um tryCatch: um erro inesperado ali não pode travar esta
-        # observeEvent nem a sessão.
-        processar_upload <- function(arquivos_upload, apagar_existentes = FALSE) {
-            req(arquivos_upload)
-            req(empresa())
+        # =================================================
+        # ABA 1 — BASE DE DADOS
+        # =================================================
+        
+        MSG_SEM_BASE <- paste0(
+            "Não existe a base do Quadro de Pessoal e Auxiliar (", ARQUIVO_BASE_PESSOAL,
+            " ou .csv) para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-la."
+        )
+        
+        MSG_BASE_SEM_RESULTADO <- "Nenhum registro encontrado com os filtros aplicados."
+        
+        # Texto de busca por linha (filtro Detalhe) — recalculado só quando
+        # a base muda, não a cada tecla digitada.
+        busca_base <- reactive({
+            texto_busca_linhas(base_exibicao())
+        })
+        
+        # Espera o usuário parar de digitar (400 ms) antes de filtrar.
+        base_cpf_d <- debounce(reactive(input$base_cpf), 400)
+        base_nome_d <- debounce(reactive(input$base_nome), 400)
+        base_detalhe_d <- debounce(reactive(input$base_detalhe), 400)
+        
+        # Filtros combinados como máscaras sobre a base completa.
+        dados_base_filtrados <- reactive({
+            df <- base_exibicao()
             
-            cam <- caminho_alertas(empresa())
-            req(cam)
+            if (nrow(df) == 0) {
+                return(df)
+            }
             
-            inicio <- Sys.time()
+            manter <- rep(TRUE, nrow(df))
             
-            if (apagar_existentes) {
-                arquivos_atuais <- list.files(cam, full.names = TRUE)
-                if (length(arquivos_atuais) > 0) {
-                    file.remove(arquivos_atuais)
+            filtrar_combo <- function(valor, regex) {
+                if (!is.null(valor) && valor != "Todos") {
+                    v <- valores_coluna_regex(df, regex)
+                    if (!is.null(v)) manter <<- manter & v == valor
                 }
             }
             
-            destinos <- file.path(cam, arquivos_upload$name)
-            copiados <- file.copy(arquivos_upload$datapath, destinos, overwrite = TRUE)
+            filtrar_texto <- function(valor, regex) {
+                valor <- str_trim(valor %||% "")
+                col <- coluna_por_regex(df, regex)
+                if (valor != "" && !is.null(col)) {
+                    manter <<- manter & str_detect(
+                        normalizar_texto_busca(coalesce(df[[col]], "")),
+                        fixed(normalizar_texto_busca(valor))
+                    )
+                }
+            }
             
-            if (all(copiados)) {
+            filtrar_combo(input$base_status, REGEX_COL_STATUS_PESSOAL)
+            filtrar_combo(input$base_cargo, REGEX_COL_CARGO)
+            filtrar_combo(input$base_situacao, REGEX_COL_SITUACAO)
+            filtrar_texto(base_cpf_d(), REGEX_COL_CPF)
+            filtrar_texto(base_nome_d(), REGEX_COL_NOME)
+            
+            # Detalhe: o texto digitado em QUALQUER coluna (sem diferenciar
+            # maiúsculas/minúsculas nem acentos).
+            detalhe <- str_trim(base_detalhe_d() %||% "")
+            if (detalhe != "") {
+                manter <- manter & str_detect(busca_base(), fixed(normalizar_texto_busca(detalhe)))
+            }
+            
+            df[manter, , drop = FALSE]
+        })
+        
+        # ---- Tabela (mesmas colunas do arquivo) ----
+        
+        output$base_tabela <- renderDT({
+            shiny::validate(need(nrow(dados_base()) > 0, MSG_SEM_BASE))
+            
+            df <- dados_base_filtrados()
+            
+            shiny::validate(need(nrow(df) > 0, MSG_BASE_SEM_RESULTADO))
+            
+            datatable(
+                df,
+                filter = "top",
+                rownames = FALSE,
+                width = "100%",
+                options = list(
+                    pageLength = 20,
+                    scrollX = TRUE,
+                    autoWidth = TRUE,
+                    width = "100%"
+                )
+            )
+        })
+        
+        # ---- Gráfico (agrupamento selecionável) ----
+        
+        resumo_base <- reactive({
+            if (nrow(dados_base()) == 0) {
+                return(list(resumo = NULL, mensagem = MSG_SEM_BASE))
+            }
+            
+            df <- dados_base_filtrados()
+            
+            if (nrow(df) == 0) {
+                return(list(resumo = NULL, mensagem = MSG_BASE_SEM_RESULTADO))
+            }
+            
+            agrupar <- input$base_grafico_agrupar %||% "Cargo"
+            regex <- AGRUPAMENTOS_BASE_PESSOAL[[agrupar]]
+            grupos <- valores_coluna_regex(df, regex)
+            
+            if (is.null(grupos)) {
+                return(list(
+                    resumo = NULL,
+                    mensagem = sprintf("Coluna \"%s\" não encontrada na base carregada.", agrupar)
+                ))
+            }
+            
+            col_cpf <- coluna_por_regex(df, REGEX_COL_CPF)
+            cpfs <- if (is.null(col_cpf)) rep(NA_character_, nrow(df)) else df[[col_cpf]]
+            
+            resumo <- tibble(Grupo = grupos, CPF = cpfs) %>%
+                group_by(Grupo) %>%
+                summarise(
+                    Quantidade = n(),
+                    Pessoas = n_distinct(CPF[!is.na(CPF) & CPF != ""]),
+                    .groups = "drop"
+                ) %>%
+                arrange(desc(Quantidade), Grupo)
+            
+            list(resumo = resumo, mensagem = NULL, agrupar = agrupar)
+        })
+        
+        output$base_grafico <- renderGirafe({
+            r <- resumo_base()
+            
+            shiny::validate(need(is.null(r$mensagem), r$mensagem))
+            
+            total <- nrow(r$resumo)
+            limite <- suppressWarnings(as.integer(input$base_grafico_qtd))
+            
+            resumo <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
+            
+            resumo <- resumo %>%
+                mutate(
+                    dica = sprintf(
+                        "<b>%s</b><br/>%s registro(s)<br/>%s pessoa(s) (CPF distintos)",
+                        htmltools::htmlEscape(Grupo),
+                        format(Quantidade, big.mark = ".", decimal.mark = ","),
+                        format(Pessoas, big.mark = ".", decimal.mark = ",")
+                    )
+                )
+            
+            grafico_barras_girafe(
+                resumo,
+                titulo = sprintf("Quantidade de Registros por %s", r$agrupar),
+                subtitulo = sprintf("Exibindo %d de %d grupo(s)", nrow(resumo), total)
+            )
+        })
+        
+        # ---- Gerar arquivo CSV ----
+        
+        output$base_csv_ui <- renderUI({
+            ui_csv_dados(ns, "base_download_csv", nrow(dados_base_filtrados()) > 0)
+        })
+        
+        output$base_download_csv <- downloadHandler(
+            
+            filename = function() {
+                paste0("base-quadro-pessoal-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
+            },
+            
+            content = function(file) {
+                inicio <- Sys.time()
+                
+                df <- dados_base_filtrados()
+                
+                # Respeita também a busca global e os filtros de coluna do DT.
+                linhas_visiveis <- input$base_tabela_rows_all
+                if (!is.null(linhas_visiveis)) {
+                    df <- df[linhas_visiveis, , drop = FALSE]
+                }
+                
+                readr::write_excel_csv2(df, file, na = "")
+                
                 showNotification(
-                    sprintf(
-                        "%d arquivo(s) enviado(s) com sucesso em %.2fs. Atualizando a tabela...",
-                        nrow(arquivos_upload),
-                        tempo_decorrido(inicio)
-                    ),
+                    sprintf("Arquivo CSV gerado em %.2fs.", tempo_decorrido(inicio)),
                     type = "message"
                 )
-            } else {
-                showNotification(
-                    sprintf(
-                        "%d de %d arquivo(s) não puderam ser copiados.",
-                        sum(!copiados),
-                        length(copiados)
-                    ),
-                    type = "error"
-                )
             }
-            
-            removeModal()
-            session$sendCustomMessage("limpar-modal-backdrop", list())
-            
-            resultado <- tryCatch(
-                carregar_alertas(cam),
-                error = function(e) {
-                    showNotification(
-                        sprintf("Arquivos enviados, mas houve erro ao recarregar a tabela: %s", conditionMessage(e)),
-                        type = "error",
-                        duration = 15
-                    )
-                    NULL
-                }
-            )
-            
-            if (!is.null(resultado)) {
-                dados(resultado)
-                atualizar_combos()
-            }
-        }
+        )
         
-        observeEvent(input$enviar_arquivos, {
-            req(entrada_upload_atual())
-            req(empresa())
-            
-            cam <- caminho_alertas(empresa())
-            req(cam)
-            
-            arquivos_existentes <- list.files(cam)
-            
-            if (length(arquivos_existentes) > 0) {
-                
-                # Fecha o modal "Gerenciar Arquivos" ANTES de abrir a
-                # confirmação, em vez de deixar o showModal() abaixo
-                # substituir um modal ainda aberto na hora — mesma correção de
-                # observeEvent(input$apagar_pasta). O valor já selecionado no
-                # fileInput (entrada_upload_atual()) continua acessível depois
-                # disso: o Shiny mantém o último valor recebido de um input
-                # mesmo com o elemento fora da tela.
-                removeModal()
-                
-                showModal(modalDialog(
-                    title = "Arquivos existentes na pasta",
-                    sprintf(
-                        "A pasta de alertas da empresa %s já contém %d arquivo(s). Deseja apagar os arquivos existentes antes de enviar os novos, ou manter os dois conjuntos?",
-                        empresa(),
-                        length(arquivos_existentes)
-                    ),
-                    footer = tagList(
-                        modalButton("Cancelar"),
-                        actionButton(ns("manter_existentes"), "Manter Existentes"),
-                        actionButton(ns("apagar_existentes"), "Apagar e Enviar", class = "btn-danger")
-                    )
-                ))
-            } else {
-                processar_upload(entrada_upload_atual(), apagar_existentes = FALSE)
-            }
-        })
+        # =================================================
+        # ABA 2 — ALERTAS
+        # =================================================
         
-        # Não chama removeModal() aqui: processar_upload() já fecha o modal
-        # "Gerenciar Arquivos" ao final (ver comentário na definição da
-        # função, acima). Fechar aqui TAMBÉM causava duas chamadas de
-        # removeModal() em sequência rápida, o que podia deixar o backdrop
-        # do Bootstrap "grudado" na tela, bloqueando cliques.
-        observeEvent(input$apagar_existentes, {
-            processar_upload(entrada_upload_atual(), apagar_existentes = TRUE)
-        })
-        
-        observeEvent(input$manter_existentes, {
-            processar_upload(entrada_upload_atual(), apagar_existentes = FALSE)
-        })
-        
-        # ----------------------------------------
-        # FILTROS
-        # ----------------------------------------
+        MSG_SEM_ARQUIVOS <- paste0(
+            "Não existem arquivos de alertas para processamento. Utilize o botão ",
+            "\"Gerenciar Arquivos\" para enviar os arquivos de alertas."
+        )
         
         dados_filtrados <- reactive({
             req(dados())
@@ -1362,13 +2394,13 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                 df <- df %>%
                     filter(str_detect(
                         str_to_upper(as.character(CPF)),
-                        str_to_upper(input$cpf)
+                        fixed(str_to_upper(str_trim(input$cpf)))
                     ))
             }
             
             if (!is.null(input$nome) && input$nome != "" && "Nome" %in% names(df)) {
                 df <- df %>%
-                    filter(str_detect(str_to_upper(Nome), str_to_upper(input$nome)))
+                    filter(str_detect(str_to_upper(Nome), fixed(str_to_upper(str_trim(input$nome)))))
             }
             
             if (!is.null(input$alerta) && input$alerta != "Todos" && input$alerta %in% names(df)) {
@@ -1393,18 +2425,9 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
             df
         })
         
-        # ----------------------------------------
-        # TABELA (colunas fixas + Alerta(s) Detectado consolidado)
-        # -----------------------------------------------------
-        # Só afeta a apresentação: dados_filtrados() continua com as
-        # colunas originais (Alerta: X / Conflito: X), usadas pelos
-        # filtros Alerta/Conflito acima e pelo gráfico logo abaixo, sem
-        # nenhuma alteração de regra.
-        # ----------------------------------------
-        
-        # Também troca o código pela nomenclatura em "Situação Profissional
-        # Atual" e "Cargo" (traduzir_codigos_tabela) — isso vale para a
-        # tabela e para o CSV gerado a partir dela.
+        # Colunas fixas + Alerta(s)/Conflito(s) Detectado consolidados, com
+        # Situação Profissional Atual e Cargo por extenso. Só apresentação:
+        # dados_filtrados() continua com as colunas originais.
         tabela_exibicao <- reactive({
             dados_filtrados() %>%
                 consolidar_alertas_tabela() %>%
@@ -1414,12 +2437,7 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
         output$tabela <- renderDT({
             df <- tabela_exibicao()
             
-            shiny::validate(
-                need(
-                    nrow(df) > 0,
-                    "Não existem arquivos para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviar os arquivos de alertas."
-                )
-            )
+            shiny::validate(need(nrow(df) > 0, MSG_SEM_ARQUIVOS))
             
             datatable(
                 df,
@@ -1435,25 +2453,7 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
             )
         })
         
-        # ----------------------------------------
-        # GRÁFICOS
-        # -----------------------------------------------------
-        # Os dois gráficos usam dados_filtrados() (mesmos filtros da
-        # tabela) e só mudam a apresentação:
-        #   1) Registros por tipo de Alerta/Conflito — echarts4r
-        #      (colunas originais "Alerta: X" / "Conflito: X").
-        #   2) Registros por Cargo — ggiraph (nomenclatura do cargo,
-        #      lida das tabelas auxiliares do SQLite; ver
-        #      traduzir_codigos_tabela()).
-        # Cada resumo é um reactive() que devolve list(resumo, mensagem):
-        # quando não há o que desenhar, `resumo` é NULL e `mensagem` traz o
-        # aviso mostrado no lugar do gráfico (via shiny::validate()).
-        # ----------------------------------------
-        
-        MSG_SEM_ARQUIVOS <- paste0(
-            "Não existem arquivos para processamento. Utilize o botão ",
-            "\"Gerenciar Arquivos\" para enviar os arquivos de alertas."
-        )
+        # ---- Gráficos: tipo de Alerta/Conflito (echarts4r) e Cargo (ggiraph) ----
         
         resumo_tipos <- reactive({
             df <- dados_filtrados()
@@ -1476,17 +2476,13 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
             
             resumo <- map_dfr(colunas_tipo, function(col) {
                 valores <- df[[col]]
-                qtd <- sum(!is.na(valores) & str_trim(valores) != "")
-                tibble(Tipo = col, Quantidade = qtd)
+                tibble(Tipo = col, Quantidade = sum(!is.na(valores) & str_trim(valores) != ""))
             }) %>%
                 filter(Quantidade > 0) %>%
                 arrange(Quantidade)   # crescente: com o eixo invertido, a maior fica no topo
             
             if (nrow(resumo) == 0) {
-                return(list(
-                    resumo = NULL,
-                    mensagem = "Nenhum alerta/conflito encontrado nos dados atuais."
-                ))
+                return(list(resumo = NULL, mensagem = "Nenhum alerta/conflito encontrado nos dados atuais."))
             }
             
             list(resumo = resumo, mensagem = NULL)
@@ -1499,14 +2495,10 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                 return(list(resumo = NULL, mensagem = MSG_SEM_ARQUIVOS))
             }
             
-            # Nomenclatura do cargo (tabelas auxiliares no SQLite).
             valores <- valores_cargo_exibicao(df, con)
             
             if (is.null(valores)) {
-                return(list(
-                    resumo = NULL,
-                    mensagem = "Coluna \"Cargo\" não encontrada nos arquivos carregados."
-                ))
+                return(list(resumo = NULL, mensagem = "Coluna \"Cargo\" não encontrada nos arquivos carregados."))
             }
             
             resumo <- tibble(Cargo = valores) %>%
@@ -1516,10 +2508,6 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
             list(resumo = resumo, mensagem = NULL)
         })
         
-        # ---- 1) Tipo de Alerta/Conflito (echarts4r) ----
-        
-        # A altura acompanha o número de barras, para os rótulos não se
-        # sobreporem quando há muitos tipos de alerta.
         output$grafico_ui <- renderUI({
             r <- resumo_tipos()
             n <- if (is.null(r$resumo)) 0 else nrow(r$resumo)
@@ -1546,8 +2534,6 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                 e_toolbox_feature(feature = "saveAsImage")
         })
         
-        # ---- 2) Registros por Cargo (ggiraph) ----
-        
         output$grafico_cargo <- renderGirafe({
             r <- resumo_cargos()
             
@@ -1565,18 +2551,11 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                 )
             
             p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
-                geom_col_interactive(
-                    aes(tooltip = dica, data_id = Cargo),
-                    fill = "#2C7FB8"
-                ) +
+                geom_col_interactive(aes(tooltip = dica, data_id = Cargo), fill = "#2C7FB8") +
                 geom_text(aes(label = Quantidade), hjust = -0.2) +
                 coord_flip() +
                 scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
-                labs(
-                    title = "Quantidade de Registros por Cargo",
-                    x = "",
-                    y = "Quantidade"
-                ) +
+                labs(title = "Quantidade de Registros por Cargo", x = "", y = "Quantidade") +
                 theme_minimal()
             
             girafe(
@@ -1590,109 +2569,38 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
             )
         })
         
-        # ==============================================
-        # GERAR ARQUIVO CSV
-        #
-        # O botão só fica disponível quando a Tabela tem
-        # dados a exibir (mesmos dados/filtros da aba
-        # "Tabela"). Nome do arquivo: "alertas-" +
-        # ano/mês/dia + hora/minuto da geração.
-        # ==============================================
+        # ---- Gerar arquivo CSV ----
         
         output$csv_ui <- renderUI({
-            
             df <- tabela_exibicao()
-            
-            tem_dados <- !is.null(df) && nrow(df) > 0
-            
-            div(
-                class = "mt-4",
-                style = "max-width: 420px;",
-                
-                p(
-                    class = "text-muted",
-                    "Gera um arquivo .csv com os dados exibidos na aba \"Tabela\" (respeitando os filtros aplicados e a busca da tabela)."
-                ),
-                
-                if (tem_dados) {
-                    
-                    downloadButton(
-                        ns("download_csv"),
-                        "Gerar arquivo CSV",
-                        icon = icon("download"),
-                        class = "btn btn-primary btn-acao"
-                    )
-                    
-                } else {
-                    
-                    tagList(
-                        
-                        tags$button(
-                            type = "button",
-                            class = "btn btn-primary btn-acao",
-                            disabled = "disabled",
-                            icon("download", class = "me-2"),
-                            "Gerar arquivo CSV"
-                        ),
-                        
-                        div(
-                            class = "text-muted mt-2",
-                            style = "font-size: .82rem;",
-                            "Não há dados na tabela para exportar."
-                        )
-                        
-                    )
-                    
-                }
-                
-            )
-            
+            ui_csv_dados(ns, "download_csv", !is.null(df) && nrow(df) > 0)
         })
         
         output$download_csv <- downloadHandler(
             
             filename = function() {
-                paste0(
-                    "alertas-",
-                    format(Sys.time(), "%Y%m%d%H%M"),
-                    ".csv"
-                )
+                paste0("alertas-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
             },
             
             content = function(file) {
-                
                 inicio <- Sys.time()
                 
                 df <- tabela_exibicao()
                 
-                # Além dos filtros da aplicação (CPF/Nome/Alerta/Conflito,
-                # já aplicados em tabela_exibicao()), respeita também o que
-                # está sendo exibido dentro do próprio objeto DT: o campo
-                # "Search" (busca global) e os filtros de coluna
-                # (filter = "top"). Como output$tabela é renderizada com
-                # processamento no servidor (padrão do renderDT), o DT
-                # expõe automaticamente input$tabela_rows_all — os índices
-                # das linhas de tabela_exibicao() que sobrevivem a essa
-                # busca/filtro, em todas as páginas.
+                # Respeita também a busca global e os filtros de coluna do DT
+                # (input$tabela_rows_all).
                 linhas_visiveis <- input$tabela_rows_all
-                
                 if (!is.null(linhas_visiveis)) {
                     df <- df[linhas_visiveis, , drop = FALSE]
                 }
                 
-                readr::write_excel_csv2(
-                    df,
-                    file,
-                    na = ""
-                )
+                readr::write_excel_csv2(df, file, na = "")
                 
                 showNotification(
                     sprintf("Arquivo CSV gerado em %.2fs.", tempo_decorrido(inicio)),
                     type = "message"
                 )
-                
             }
-            
         )
         
     })

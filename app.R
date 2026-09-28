@@ -7,14 +7,22 @@
 #
 #   - Barra lateral de ícones com um ícone "Menu" no topo, que expande/
 #     recolhe a barra mostrando a descrição de cada ícone.
-#   - "Administração" (janela modal com o cadastro TOTP e a auditoria de
-#     login) e "Trocar empresa": disponíveis só para quem entrou via Login
-#     Corporativo (AD). Um usuário TOTP continua sempre fixo na empresa
-#     do próprio cadastro. (Regra centralizada em ehAdmin() /
-#     podeTrocarEmpresa(), no server.)
-#   - O módulo Alertas recebe a empresa da sessão (distroSelecionado) e a
-#     conexão SQLite (con), usada para traduzir os códigos de Situação
-#     Profissional Atual e Cargo.
+#   - A navegação entre os módulos é feita pela barra lateral (não há
+#     mais abas):
+#       "Serventias"         -> mod_alertas_serventias.R
+#                               (<PASTA_ALERTAS>/<EMPRESA>/serventias)
+#       "Pessoal e Auxiliar" -> mod_alertas.R
+#                               (<PASTA_ALERTAS>/<EMPRESA>/pessoal)
+#     Ambos recebem a empresa da sessão (distroSelecionado); o de Pessoal
+#     também recebe a conexão SQLite (con), usada para traduzir os
+#     códigos de Situação Profissional Atual e Cargo.
+#   - Botão "Configurações": abre um submenu com "Administração" (janela
+#     modal com o cadastro TOTP e a auditoria de login), "Trocar empresa"
+#     e "Ver instruções". Administração e Trocar empresa só aparecem para
+#     quem entrou via Login Corporativo (AD); um usuário TOTP continua
+#     fixo na empresa do próprio cadastro. (Regra centralizada em
+#     ehAdmin() / podeTrocarEmpresa(), no server.)
+#   - Banco SQLite da aplicação: data/faroljus.db (antes radarsocial.db).
 #
 # Corrige o diretório de trabalho caso o projeto não
 # tenha sido aberto pelo .Rproj
@@ -65,9 +73,30 @@ use_python(python_path, required = TRUE)
 # =====================================================
 dir.create(here::here("data"), recursive = TRUE, showWarnings = FALSE)
 
+# O banco se chamava radarsocial.db (herança do RadarSocial). Migração
+# automática: se só existir o arquivo antigo, ele é COPIADO para o novo
+# nome na primeira execução — cadastros TOTP, auditoria de login e
+# tabelas auxiliares continuam valendo. O arquivo antigo não é apagado;
+# pode ser removido manualmente depois de conferir que está tudo certo.
+DB_PATH <- here::here("data", "faroljus.db")
+DB_PATH_ANTIGO <- here::here("data", "radarsocial.db")
+
+if (!file.exists(DB_PATH) && file.exists(DB_PATH_ANTIGO)) {
+    
+    if (file.copy(DB_PATH_ANTIGO, DB_PATH)) {
+        message("Banco migrado: ", DB_PATH_ANTIGO, " -> ", DB_PATH)
+    } else {
+        warning(
+            "Não foi possível copiar ", DB_PATH_ANTIGO, " para ", DB_PATH,
+            ". Um banco novo e vazio será criado em ", DB_PATH, "."
+        )
+    }
+    
+}
+
 con <- dbConnect(
     SQLite(),
-    here::here("data", "radarsocial.db")
+    DB_PATH
 )
 
 # Fecha a conexão SQLite quando a aplicação for encerrada.
@@ -89,6 +118,20 @@ source(here::here("R", "database.R"))
 source(here::here("modules", "mod_totp_admin.R"))
 
 source(here::here("modules", "mod_alertas.R"))
+# Precisa vir DEPOIS de mod_alertas.R: reaproveita funções definidas lá
+# (caminho_alertas(), SUBPASTA_SERVENTIAS, ler_arquivo_alertas()...).
+source(here::here("modules", "mod_alertas_serventias.R"))
+
+# =========================================================================
+# MÓDULOS (valores internos do navset "menu")
+# -------------------------------------------------------------------------
+# Cada valor identifica um painel do navset_hidden "menu" e o botão da
+# barra lateral que o abre (atributo data-menu). ABA_INICIAL é o módulo
+# aberto após o login/logout.
+# =========================================================================
+ABA_ALERTAS_SERVENTIAS <- "AlertasServentias"
+ABA_ALERTAS_QUADRO <- "Alertas"
+ABA_INICIAL <- ABA_ALERTAS_SERVENTIAS
 
 # =========================================================================
 # ESQUEMA DO BANCO (usuarios_totp / login_auditoria + coluna "distro")
@@ -520,6 +563,70 @@ ui <- fluidPage(
         margin-left: 210px;
       }
 
+      /* Botão do módulo que está aberto (Serventias / Pessoal e
+         Auxiliar) — ver handler JS marcar-menu-ativo. */
+      .icon-bar .icon-btn.ativo {
+        background: rgba(255,255,255,.18);
+        color: #fff;
+        box-shadow: inset 3px 0 0 #6ea8fe;
+      }
+
+      /* =============================================
+         CONFIGURAÇÕES — submenu flutuante à direita da barra
+         ============================================= */
+
+      .icon-grupo {
+        position: relative;
+      }
+
+      .icon-bar.expandida .icon-grupo {
+        width: 100%;
+      }
+
+      .submenu-config {
+        display: none;
+        position: absolute;
+        top: 0;
+        left: calc(100% + 10px);
+        min-width: 220px;
+        background: #fff;
+        border: 1px solid rgba(0,0,0,.08);
+        border-radius: .6rem;
+        box-shadow: 0 .5rem 1.25rem rgba(15,23,42,.18);
+        padding: .35rem;
+        z-index: 1060;
+      }
+
+      .submenu-config.aberto {
+        display: block;
+      }
+
+      .submenu-config .submenu-titulo {
+        font-size: .7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #6c757d;
+        padding: .35rem .6rem .25rem .6rem;
+      }
+
+      .submenu-config .submenu-item {
+        display: flex;
+        align-items: center;
+        gap: .6rem;
+        padding: .5rem .6rem;
+        border-radius: .4rem;
+        color: #212529;
+        font-size: .9rem;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+
+      .submenu-config .submenu-item:hover {
+        background: #eef4ff;
+        color: #0d6efd;
+      }
+
       #app-content {
         margin-left: 52px;
         padding: 20px 25px;
@@ -828,7 +935,51 @@ ui <- fluidPage(
 
       );
 
-      // Enviado por mod_alertas.R depois de fechar os modais de
+      // Submenu 'Configurações' — abre/fecha no navegador (sem ida ao
+      // servidor). Fecha ao escolher uma opção, ao clicar fora ou com Esc.
+      function fecharSubmenuConfig() {
+        $('#submenu_config').removeClass('aberto');
+        $('#btn_configuracoes').attr('aria-expanded', 'false');
+      }
+
+      $(document).on('click', '#btn_configuracoes', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var aberto = $('#submenu_config').toggleClass('aberto').hasClass('aberto');
+        $(this).attr('aria-expanded', aberto ? 'true' : 'false');
+      });
+
+      $(document).on('click', '#submenu_config .submenu-item', fecharSubmenuConfig);
+
+      $(document).on('click', function(e) {
+        if (!$(e.target).closest('.icon-grupo').length) fecharSubmenuConfig();
+      });
+
+      $(document).on('keydown', function(e) {
+        if (e.key === 'Escape') fecharSubmenuConfig();
+      });
+
+      // Destaca, na barra lateral, o botão do módulo aberto.
+      Shiny.addCustomMessageHandler(
+
+        'marcar-menu-ativo',
+
+        function(message) {
+
+          document
+            .querySelectorAll('.icon-bar .icon-btn[data-menu]')
+            .forEach(function(el) {
+              el.classList.toggle(
+                'ativo',
+                el.getAttribute('data-menu') === message.menu
+              );
+            });
+
+        }
+
+      );
+
+      // Enviado por mod_alertas.R e mod_alertas_serventias.R depois de fechar os modais de
       // 'Gerenciar Arquivos'. Remove um backdrop do Bootstrap que tenha
       // ficado 'grudado' na tela (bloqueando cliques) quando um modal é
       // trocado por outro rapidamente. Sem este handler registrado, o
@@ -912,12 +1063,13 @@ server <- function(input, output, session) {
     # ===================================================
     # MÓDULO SELECIONADO
     # ---------------------------------------------------
-    # Começa em "Alertas" (antes era "Usuário", aba que não existe — o
-    # módulo Alertas ficava com ativo() = FALSE até o usuário clicar em
-    # uma aba).
+    # Começa na aba inicial (ABA_INICIAL = "Alertas - Serventias", a
+    # primeira da esquerda). Precisa ser uma aba que existe, senão o
+    # módulo correspondente fica com ativo() = FALSE até o usuário clicar
+    # em uma aba.
     # ===================================================
     
-    menuSelecionado <- reactiveVal("Alertas")
+    menuSelecionado <- reactiveVal(ABA_INICIAL)
     
     # Incrementado a cada logout — sinaliza para mod_totp_admin_server()
     # limpar seu estado interno (chave recém-gerada, campos do formulário),
@@ -1206,13 +1358,13 @@ server <- function(input, output, session) {
                 
                 metodoAutenticado("AD")
                 distroSelecionado(distro_escolhida)
-                menuSelecionado("Alertas")
+                menuSelecionado(ABA_INICIAL)
                 
-                # Garante que a aba volte para "Alertas" sem recriar a UI toda
+                # Garante que a aba volte para a aba inicial sem recriar a UI toda
                 updateTabsetPanel(
                     session,
                     "menu",
-                    selected = "Alertas"
+                    selected = ABA_INICIAL
                 )
                 
                 showNotification(
@@ -1287,12 +1439,12 @@ server <- function(input, output, session) {
                 dadosUsuario(dados)
                 metodoAutenticado("TOTP")
                 distroSelecionado(dados$distro)
-                menuSelecionado("Alertas")
+                menuSelecionado(ABA_INICIAL)
                 
                 updateTabsetPanel(
                     session,
                     "menu",
-                    selected = "Alertas"
+                    selected = ABA_INICIAL
                 )
                 
                 showNotification(
@@ -1334,7 +1486,7 @@ server <- function(input, output, session) {
             metodoAutenticado(NULL)
             metodoAcesso(NULL)
             distroSelecionado(NULL)
-            menuSelecionado("Alertas")
+            menuSelecionado(ABA_INICIAL)
             
             # A tela principal é recriada no próximo login com o cabeçalho
             # visível e a barra recolhida — o estado precisa acompanhar,
@@ -1451,6 +1603,27 @@ server <- function(input, output, session) {
     # ===================================================
     # CAPTURA DA ABA SELECIONADA
     # ===================================================
+    
+    # ===================================================
+    # NAVEGAÇÃO PELOS BOTÕES DA BARRA LATERAL
+    # ---------------------------------------------------
+    # Troca o painel do navset_hidden "menu", atualiza menuSelecionado()
+    # (que controla o `ativo` de cada módulo) e destaca o botão.
+    # ===================================================
+    
+    selecionar_menu <- function(aba) {
+        menuSelecionado(aba)
+        nav_select("menu", selected = aba, session = session)
+        session$sendCustomMessage("marcar-menu-ativo", list(menu = aba))
+    }
+    
+    observeEvent(input$ir_serventias, {
+        selecionar_menu(ABA_ALERTAS_SERVENTIAS)
+    }, ignoreInit = TRUE)
+    
+    observeEvent(input$ir_pessoal, {
+        selecionar_menu(ABA_ALERTAS_QUADRO)
+    }, ignoreInit = TRUE)
     
     observeEvent(
         
@@ -1691,38 +1864,96 @@ server <- function(input, output, session) {
                     title = "Mostrar/ocultar informações do usuário"
                 ),
                 
-                if (ehAdmin()) {
-                    actionLink(
-                        "abrir_admin",
-                        tagList(
-                            icon("user-shield"),
-                            tags$span(class = "icon-label", "Administração")
-                        ),
-                        class = "icon-btn",
-                        title = "Administração"
-                    )
-                },
-                
-                if (podeTrocarEmpresa()) {
-                    actionLink(
-                        "trocar_empresa",
-                        tagList(
-                            icon("building"),
-                            tags$span(class = "icon-label", "Trocar empresa")
-                        ),
-                        class = "icon-btn",
-                        title = "Trocar empresa"
-                    )
-                },
+                # -----------------------------------------------
+                # MÓDULOS — substituem as antigas abas. data-menu liga
+                # o botão ao painel do navset "menu" e serve para
+                # destacar o módulo aberto (handler "marcar-menu-ativo").
+                # -----------------------------------------------
                 
                 actionLink(
-                    "mostrar_readme",
+                    "ir_serventias",
                     tagList(
-                        icon("circle-info"),
-                        tags$span(class = "icon-label", "Ver instruções")
+                        icon("building-columns"),
+                        tags$span(class = "icon-label", "Serventias")
                     ),
-                    class = "icon-btn",
-                    title = "Ver instruções (README)"
+                    class = paste(
+                        "icon-btn",
+                        if (identical(isolate(menuSelecionado()), ABA_ALERTAS_SERVENTIAS)) "ativo"
+                    ),
+                    title = "Serventias",
+                    `data-menu` = ABA_ALERTAS_SERVENTIAS
+                ),
+                
+                actionLink(
+                    "ir_pessoal",
+                    tagList(
+                        icon("users"),
+                        tags$span(class = "icon-label", "Pessoal e Auxiliar")
+                    ),
+                    class = paste(
+                        "icon-btn",
+                        if (identical(isolate(menuSelecionado()), ABA_ALERTAS_QUADRO)) "ativo"
+                    ),
+                    title = "Pessoal e Auxiliar",
+                    `data-menu` = ABA_ALERTAS_QUADRO
+                ),
+                
+                # -----------------------------------------------
+                # CONFIGURAÇÕES — submenu com Administração, Trocar
+                # empresa e Ver instruções. Os IDs das opções são os
+                # mesmos dos antigos ícones, então os observeEvent()
+                # do server continuam valendo sem alteração. O
+                # abrir/fechar do submenu é só no navegador (JS
+                # fecharSubmenuConfig / #btn_configuracoes).
+                # -----------------------------------------------
+                
+                div(
+                    class = "icon-grupo",
+                    
+                    tags$a(
+                        id = "btn_configuracoes",
+                        href = "#",
+                        class = "icon-btn",
+                        title = "Configurações",
+                        role = "button",
+                        `aria-haspopup` = "true",
+                        `aria-expanded` = "false",
+                        icon("gear"),
+                        tags$span(class = "icon-label", "Configurações")
+                    ),
+                    
+                    div(
+                        id = "submenu_config",
+                        class = "submenu-config",
+                        role = "menu",
+                        
+                        div(class = "submenu-titulo", "Configurações"),
+                        
+                        if (ehAdmin()) {
+                            actionLink(
+                                "abrir_admin",
+                                tagList(icon("user-shield", class = "fa-fw"), "Administração"),
+                                class = "submenu-item",
+                                role = "menuitem"
+                            )
+                        },
+                        
+                        if (podeTrocarEmpresa()) {
+                            actionLink(
+                                "trocar_empresa",
+                                tagList(icon("building", class = "fa-fw"), "Trocar empresa"),
+                                class = "submenu-item",
+                                role = "menuitem"
+                            )
+                        },
+                        
+                        actionLink(
+                            "mostrar_readme",
+                            tagList(icon("circle-info", class = "fa-fw"), "Ver instruções"),
+                            class = "submenu-item",
+                            role = "menuitem"
+                        )
+                    )
                 ),
                 
                 actionLink(
@@ -1814,22 +2045,23 @@ server <- function(input, output, session) {
                 hr(),
                 
                 # ===============================================
-                # ABAS
+                # MÓDULOS (painéis sem abas)
+                # -----------------------------------------------
+                # A troca de painel é feita pelos botões "Serventias" e
+                # "Pessoal e Auxiliar" da barra lateral (ver
+                # selecionar_menu() no server).
                 # ===============================================
                 
-                do.call(
-                    navset_tab,
-                    c(
-                        list(
-                            id = "menu",
-                            selected = isolate(menuSelecionado())
-                        ),
-                        # "Usuário" foi removida e "Administração TOTP" virou
-                        # janela modal (ícone "Administração", ver
-                        # observeEvent(input$abrir_admin)).
-                        list(
-                            nav_panel("Alertas", mod_alertas_ui("alertas"))
-                        )
+                navset_hidden(
+                    id = "menu",
+                    selected = isolate(menuSelecionado()),
+                    nav_panel_hidden(
+                        value = ABA_ALERTAS_SERVENTIAS,
+                        mod_alertas_serventias_ui("alertas_serventias")
+                    ),
+                    nav_panel_hidden(
+                        value = ABA_ALERTAS_QUADRO,
+                        mod_alertas_ui("alertas")
                     )
                 )
                 
@@ -1852,9 +2084,15 @@ server <- function(input, output, session) {
     # NULL (o req(empresa()) do botão "Gerenciar Arquivos" abortava em
     # silêncio e nenhum dado era carregado) e, sem con, as colunas
     # Situação Profissional Atual / Cargo continuavam em código.
+    mod_alertas_serventias_server(
+        "alertas_serventias",
+        ativo = reactive(menuSelecionado() == ABA_ALERTAS_SERVENTIAS),
+        empresa = distroSelecionado
+    )
+    
     mod_alertas_server(
         "alertas",
-        ativo = reactive(menuSelecionado() == "Alertas"),
+        ativo = reactive(menuSelecionado() == ABA_ALERTAS_QUADRO),
         empresa = distroSelecionado,
         con = con
     )
