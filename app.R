@@ -158,6 +158,11 @@ source(here::here("modules", "mod_painel.R"))
 # R/tabelas_auxiliares.R. Depois dos módulos, que definem os padrões.
 source(here::here("R", "tabelas_auxiliares.R"))
 
+# Tabelas de referência (municípios, competências, tipo e classificação
+# de unidade judiciária) — nomes no lugar de códigos. Ver
+# R/tabelas_referencia.R e a pasta referencias/.
+source(here::here("R", "tabelas_referencia.R"))
+
 # =========================================================================
 # MÓDULOS (valores internos do navset "menu")
 # -------------------------------------------------------------------------
@@ -195,6 +200,7 @@ garantir_schema_totp(con)
 # processo, numa transação, e lidas para as constantes usadas pelos
 # módulos — ver R/tabelas_auxiliares.R.
 carregar_tabelas_auxiliares(con)
+carregar_tabelas_referencia(con)
 
 # =========================================================================
 # MIGRAÇÃO DAS PASTAS DE PESSOAL E AUXILIAR (layout antigo -> Lite)

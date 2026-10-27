@@ -48,7 +48,7 @@ checar <- function(descricao, condicao) {
 dir_teste <- file.path(tempdir(), "faroljus_teste")
 unlink(dir_teste, recursive = TRUE)
 dir.create(file.path(dir_teste, "data"), recursive = TRUE)
-for (item in c("app.R", "README.md", "R", "modules", "img")) {
+for (item in c("app.R", "README.md", "R", "modules", "img", "referencias")) {
     file.copy(file.path(raiz_projeto, item), dir_teste, recursive = TRUE)
 }
 
@@ -1319,6 +1319,78 @@ testServer(mod_serventias_server, args = list(empresa = reactive("TJSE"), ativo 
     checar("Serventias (módulo): download traz as linhas do envio", nrow(d) == 2)
     checar("Serventias (módulo): aba CSV do Envio tem o Gerar Novo Envio",
            grepl("novo_envio_ui", paste(as.character(output$envio_csv_ui$html), collapse = ""), fixed = TRUE))
+})
+
+# =====================================================
+cat("\n[14] Tabelas de referência (municípios, competências, classificação de unidades)\n")
+# =====================================================
+
+checar("módulos com os nomes novos (mod_pessoal_auxiliar, mod_magistrados, mod_serventias)",
+       all(file.exists(file.path(dir_teste, "modules", c("mod_pessoal_auxiliar.R", "mod_magistrados.R", "mod_serventias.R")))) &&
+           !any(file.exists(file.path(dir_teste, "modules", c("mod_alertas.R", "mod_alertas_magistrados.R", "mod_alertas_serventias.R")))) &&
+           !grepl("mod_alertas", codigo_app, fixed = TRUE))
+n_tab <- function(t) dbGetQuery(con, sprintf("SELECT COUNT(*) n FROM %s", t))$n
+checar("tabelas de referência criadas e preenchidas a partir dos CSVs",
+       n_tab("tab_municipio") == 75 && n_tab("tab_competencia") == 39 &&
+           n_tab("tab_classificacao_unidade") == 46 && n_tab("tab_tipo_unidade") == 4)
+checar("vetores de referência carregados para a aplicação",
+       unname(REF_MUNICIPIOS["366"]) == "AREIA BRANCA" && unname(REF_COMPETENCIAS["1"]) == "Juízo Único" &&
+           unname(REF_CLASSIFICACOES_UNIDADE["109"]) == "PA - Postos Avançados")
+checar("vários códigos na mesma célula, zero à esquerda e código desconhecido",
+       identical(codigos_para_nomes(c("366, 1546", "0291", "9999", NA, ""), REF_MUNICIPIOS),
+                 c("AREIA BRANCA; DIVINA PASTORA", "ARACAJU", "9999", NA, "")))
+invisible(dbExecute(con, "UPDATE tab_competencia SET descricao = 'Vara Única' WHERE codigo = 1"))
+carregar_tabelas_referencia(con)
+checar("ajuste no banco é preservado (o CSV não sobrescreve)", unname(REF_COMPETENCIAS["1"]) == "Vara Única")
+invisible(dbExecute(con, "UPDATE tab_competencia SET descricao = 'Juízo Único' WHERE codigo = 1"))
+carregar_tabelas_referencia(con)
+
+srv_ref <- data.frame(
+    `Código Serventia` = c("18160", "18169"), CEP = c("49580970", "49650000"),
+    `Juizo 100% Digital` = c("S", "N"), `Tipo de Unidade Judiciária` = c("UJ1", "uj2"),
+    `Classificação da Unidade Judiciária` = c("109", "201"), `Municípios Abrangidos` = c("366", "1546;291"),
+    `Competências` = c("1", "2, 3"), `Entrância` = c("2", "1"), `Balcão Virtual` = c("S", ""),
+    check.names = FALSE
+)
+t_ref <- traduzir_referencias_serventias(srv_ref)
+checar("Serventias: município, competência, tipo e classificação por nome; S/N vira Sim/Não",
+       identical(t_ref$`Municípios Abrangidos`, c("AREIA BRANCA", "DIVINA PASTORA; ARACAJU")) &&
+           identical(t_ref$`Competências`, c("Juízo Único", "Cível; Criminal")) &&
+           identical(t_ref$`Tipo de Unidade Judiciária`, c("Unidade Judiciária de 1º grau",
+                                                           "Unidade Judiciária de 2º grau ou de tribunal superior")) &&
+           grepl("^Gab2", t_ref$`Classificação da Unidade Judiciária`[2]) &&
+           identical(t_ref$`Juizo 100% Digital`, c("Sim", "Não")) && identical(t_ref$`Balcão Virtual`, c("Sim", "")))
+checar("Serventias: CEP, código e entrância continuam como no arquivo",
+       identical(t_ref$CEP, srv_ref$CEP) && identical(t_ref$`Código Serventia`, srv_ref$`Código Serventia`) &&
+           identical(t_ref$`Entrância`, srv_ref$`Entrância`))
+
+unlink(file.path(dir_teste, "data", "MPRO"), recursive = TRUE)
+dir.create(pasta_serventias("MPRO"), recursive = TRUE, showWarnings = FALSE)
+readr::write_excel_csv2(srv_ref, file.path(pasta_serventias("MPRO"), "serventias_envio.csv"), na = "")
+readr::write_excel_csv2(data.frame(`Código Serventia` = "18169", `Alerta: Competência` = "x", check.names = FALSE),
+                        file.path(pasta_serventias("MPRO"), "alertas_serventias.csv"), na = "")
+limpar_cache_arquivos()
+testServer(mod_serventias_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "envio", envio_status = "Todos", envio_unidade = "Todos",
+                      envio_entrancia = "Todos", envio_codigo = "", envio_detalhe = "")
+    checar("Serventias (módulo): tabela do Envio com nomes",
+           any(envio_exibicao()$`Municípios Abrangidos` == "AREIA BRANCA"))
+    session$setInputs(envio_detalhe = "divina")
+    session$elapse(500)
+    checar("Serventias (módulo): Detalhe encontra pelo nome do município", nrow(dados_envio_filtrados()) == 1)
+    session$setInputs(envio_detalhe = "", envio_grafico_agrupar = "Município abrangido")
+    session$elapse(500)
+    r <- resumo_agrupamento_serventias(envio_exibicao(), "Município abrangido")
+    checar("Serventias (módulo): gráfico por Município abrangido (um grupo por município)",
+           setequal(r$Grupo, c("AREIA BRANCA", "DIVINA PASTORA", "ARACAJU")) && all(r$Quantidade == 1))
+    checar("Serventias (módulo): gráfico por Competência e por CEP",
+           setequal(resumo_agrupamento_serventias(envio_exibicao(), "Competência")$Grupo, c("Juízo Único", "Cível", "Criminal")) &&
+               setequal(resumo_agrupamento_serventias(envio_exibicao(), "CEP")$Grupo, c("49580-970", "49650-000")))
+    d <- ler_arquivo_dados(output$envio_download_csv, "csv")
+    checar("Serventias (módulo): CSV da tabela sai com os nomes", "AREIA BRANCA" %in% d$`Municípios Abrangidos`)
+    n <- novo_envio()$dados
+    checar("Serventias (módulo): Gerar Novo Envio continua com os códigos",
+           nrow(n) == 1 && n$`Municípios Abrangidos` == "1546;291" && n$`Competências` == "2, 3")
 })
 
 # =====================================================

@@ -214,6 +214,123 @@ REGEX_COL_STATUS <- "^status$"
 REGEX_COL_CEP <- "^cep$"
 REGEX_COL_UNIDADE_ORIGEM <- "^codigo da unidade de origem"
 REGEX_COL_ENTRANCIA <- "^entrancia$"
+REGEX_COL_MUNICIPIOS <- "^municipios abrangidos"
+REGEX_COL_COMPETENCIAS <- "^competencias?$"
+REGEX_COL_TIPO_UNIDADE <- "^tipo de unidade"
+REGEX_COL_CLASSIFICACAO_UNIDADE <- "^classificacao da unidade"
+REGEX_COLS_SIM_NAO <- "^(juizo 100% digital|balcao virtual|nucleo de justica 4\\.0)$"
+
+# =====================================================
+# NOMES NO LUGAR DE CÓDIGOS (tabelas de referência)
+# -----------------------------------------------------
+# Só para exibição (tabelas, gráficos, busca Detalhe e o CSV gerado a
+# partir da tabela) — o Gerar Novo Envio sai com os códigos, como nos
+# arquivos. As tabelas vêm do SQLite (ver R/tabelas_referencia.R):
+#   Municípios Abrangidos  366         -> AREIA BRANCA
+#   Competências           1           -> Juízo Único
+#   Tipo de Unidade        UJ1         -> Unidade Judiciária de 1º grau
+#   Classificação          109         -> PA - Postos Avançados
+#   Juizo 100% Digital, Balcão Virtual, Núcleo de Justiça 4.0: S/N -> Sim/Não
+# Código sem correspondência fica como veio.
+# =====================================================
+
+traduzir_referencias_serventias <- function(df) {
+    
+    if (is.null(df) || nrow(df) == 0) {
+        return(df)
+    }
+    
+    nomes <- normalizar_nome_coluna(names(df))
+    
+    aplicar <- function(regex, tabela, maiusculas = FALSE) {
+        for (i in which(str_detect(nomes, regex))) {
+            df[[i]] <<- codigos_para_nomes(df[[i]], tabela, maiusculas = maiusculas)
+        }
+    }
+    
+    aplicar(REGEX_COL_MUNICIPIOS, REF_MUNICIPIOS)
+    aplicar(REGEX_COL_COMPETENCIAS, REF_COMPETENCIAS)
+    aplicar(REGEX_COL_TIPO_UNIDADE, REF_TIPOS_UNIDADE, maiusculas = TRUE)
+    aplicar(REGEX_COL_CLASSIFICACAO_UNIDADE, REF_CLASSIFICACOES_UNIDADE)
+    
+    for (i in which(str_detect(nomes, REGEX_COLS_SIM_NAO))) {
+        v <- str_trim(toupper(as.character(df[[i]])))
+        df[[i]] <- ifelse(!is.na(v) & v == "S", "Sim", ifelse(!is.na(v) & v == "N", "Não", df[[i]]))
+    }
+    
+    df
+    
+}
+
+# Agrupamentos do gráfico das abas Base de Dados e Envio (rótulo ->
+# regex da coluna). Municípios e Competências podem ter vários valores
+# por serventia: cada um conta para o seu grupo.
+AGRUPAMENTOS_SERVENTIAS <- c(
+    "CEP"                          = REGEX_COL_CEP,
+    "Município abrangido"          = REGEX_COL_MUNICIPIOS,
+    "Competência"                  = REGEX_COL_COMPETENCIAS,
+    "Classificação da unidade"     = REGEX_COL_CLASSIFICACAO_UNIDADE,
+    "Tipo de unidade"              = REGEX_COL_TIPO_UNIDADE,
+    "Entrância"                    = REGEX_COL_ENTRANCIA,
+    "Código da Unidade de Origem"  = REGEX_COL_UNIDADE_ORIGEM
+)
+
+AGRUPAMENTOS_MULTIPLOS_SERVENTIAS <- c("Município abrangido", "Competência")
+
+# Resumo do gráfico das abas Base de Dados e Envio: quantidade de
+# serventias por grupo (CEP, município abrangido, competência...) e os
+# nomes (ou códigos) das serventias de cada grupo, para o tooltip. NULL
+# se o arquivo não tiver a coluna do agrupamento.
+resumo_agrupamento_serventias <- function(df, agrupar) {
+    
+    col <- coluna_serventia(df, AGRUPAMENTOS_SERVENTIAS[[agrupar]])
+    
+    if (is.null(col)) {
+        return(NULL)
+    }
+    
+    col_nome <- coluna_serventia(df, REGEX_COL_NOME_SERVENTIA)
+    col_codigo <- coluna_serventia(df, REGEX_COL_CODIGO_SERVENTIA)
+    
+    # Identificação da serventia no tooltip: nome, ou o código se o
+    # arquivo não tiver nome (ex.: arquivo de envio).
+    quem <- if (!is.null(col_nome)) {
+        df[[col_nome]]
+    } else if (!is.null(col_codigo)) {
+        df[[col_codigo]]
+    } else {
+        rep(NA_character_, nrow(df))
+    }
+    
+    grupos <- if (agrupar == "CEP") {
+        as.list(formatar_cep(df[[col]]))
+    } else if (agrupar %in% AGRUPAMENTOS_MULTIPLOS_SERVENTIAS) {
+        lapply(as.character(df[[col]]), function(v) {
+            partes <- str_trim(strsplit(coalesce(v, ""), ";", fixed = TRUE)[[1]])
+            partes <- partes[partes != ""]
+            if (length(partes) == 0) ROTULO_SERV_VAZIO else partes
+        })
+    } else {
+        v <- str_trim(as.character(df[[col]]))
+        as.list(ifelse(is.na(v) | v == "", ROTULO_SERV_VAZIO, v))
+    }
+    
+    resumo <- tibble(
+        Grupo = unlist(grupos, use.names = FALSE),
+        Nome = rep(as.character(quem), lengths(grupos))
+    ) %>%
+        group_by(Grupo) %>%
+        summarise(
+            Quantidade = n(),
+            Serventias = resumir_nomes(Nome),
+            .groups = "drop"
+        ) %>%
+        arrange(desc(Quantidade), Grupo)
+    
+    resumo
+    
+}
+
 
 # Funções genéricas de mod_pessoal_auxiliar.R, com os nomes usados neste módulo.
 coluna_serventia <- coluna_por_regex
@@ -755,20 +872,31 @@ ui_aba_cadastro_serventias <- function(ns, p, titulo, icone) {
                 tabPanel(
                     tagList(icon("chart-column", class = "me-1"), "Gráfico"),
                     
-                    div(
+                    fluidRow(
                         class = "mt-3",
-                        style = "max-width: 320px;",
                         id = id("grafico_controles"),
-                        selectInput(
-                            id("grafico_qtd"),
-                            "Exibir",
-                            choices = c(
-                                "Os 20 CEPs com mais serventias" = "20",
-                                "Os 50 CEPs com mais serventias" = "50",
-                                "Todos os CEPs" = "0"
-                            ),
-                            selected = "20",
-                            width = "100%"
+                        column(
+                            4,
+                            selectInput(
+                                id("grafico_agrupar"), "Agrupar por",
+                                choices = names(AGRUPAMENTOS_SERVENTIAS),
+                                selected = "CEP",
+                                width = "100%"
+                            )
+                        ),
+                        column(
+                            4,
+                            selectInput(
+                                id("grafico_qtd"),
+                                "Exibir",
+                                choices = c(
+                                    "Os 20 maiores grupos" = "20",
+                                    "Os 50 maiores grupos" = "50",
+                                    "Todos os grupos" = "0"
+                                ),
+                                selected = "20",
+                                width = "100%"
+                            )
                         )
                     ),
                     
@@ -797,13 +925,21 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
     
     MSG_SEM_RESULTADO <- "Nenhuma serventia encontrada com os filtros aplicados."
     
+    # Mesmas colunas e ordem do arquivo, com nomes no lugar dos códigos
+    # (município, competência, tipo e classificação da unidade, S/N) —
+    # ver traduzir_referencias_serventias(). Tabela, filtros, Detalhe,
+    # gráfico e CSV usam esta versão.
+    exibicao <- reactive({
+        traduzir_referencias_serventias(dados())
+    })
+    
     # Quando o arquivo passa de "sem dados" para "com dados" (primeiro
     # envio, troca de empresa), o Status volta ao padrão "Ativo".
     status_anterior <- character(0)
     
     atualizar_combos <- function() {
         
-        df <- dados()
+        df <- exibicao()
         
         status <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_STATUS))
         unidades <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_UNIDADE_ORIGEM))
@@ -834,7 +970,7 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
     # Texto de busca por linha (filtro Detalhe) — recalculado só quando o
     # arquivo muda, não a cada tecla digitada.
     busca <- reactive({
-        texto_busca_linhas(dados())
+        texto_busca_linhas(exibicao())
     })
     
     # Espera o usuário parar de digitar (400 ms) antes de filtrar.
@@ -844,7 +980,7 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
     # Filtros combinados como máscaras; a tabela mantém TODAS as colunas
     # do arquivo, na ordem original.
     filtrados <- reactive({
-        df <- dados()
+        df <- exibicao()
         
         if (nrow(df) == 0) {
             return(df)
@@ -894,7 +1030,7 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
         tabela_dt(df)
     })
     
-    # ---- Gráfico por CEP (ggiraph) ----
+    # ---- Gráfico (agrupamento selecionável; padrão: CEP) ----
     
     resumo_cep <- reactive({
         if (nrow(dados()) == 0) {
@@ -907,27 +1043,16 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
             return(list(resumo = NULL, mensagem = MSG_SEM_RESULTADO))
         }
         
-        col_cep <- coluna_serventia(df, REGEX_COL_CEP)
+        agrupar <- valor("grafico_agrupar") %||% "CEP"
+        if (!(agrupar %in% names(AGRUPAMENTOS_SERVENTIAS))) agrupar <- "CEP"
         
-        if (is.null(col_cep)) {
-            return(list(resumo = NULL, mensagem = "Coluna \"CEP\" não encontrada no arquivo carregado."))
+        resumo <- resumo_agrupamento_serventias(df, agrupar)
+        
+        if (is.null(resumo)) {
+            return(list(resumo = NULL, mensagem = sprintf("Coluna \"%s\" não encontrada no arquivo carregado.", agrupar)))
         }
         
-        col_nome <- coluna_serventia(df, REGEX_COL_NOME_SERVENTIA)
-        
-        resumo <- tibble(
-            CEP = formatar_cep(df[[col_cep]]),
-            Nome = if (is.null(col_nome)) NA_character_ else df[[col_nome]]
-        ) %>%
-            group_by(CEP) %>%
-            summarise(
-                Quantidade = n(),
-                Serventias = resumir_nomes(Nome),
-                .groups = "drop"
-            ) %>%
-            arrange(desc(Quantidade), CEP)
-        
-        list(resumo = resumo, mensagem = NULL)
+        list(resumo = resumo, mensagem = NULL, agrupar = agrupar)
     })
     
     output[[id("grafico_cep")]] <- renderGirafe({
@@ -935,40 +1060,44 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
         
         shiny::validate(need(is.null(r$mensagem), r$mensagem))
         
-        total_ceps <- nrow(r$resumo)
+        total <- nrow(r$resumo)
         limite <- suppressWarnings(as.integer(valor("grafico_qtd")))
         
         resumo <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
+        prefixo <- if (identical(r$agrupar, "CEP")) "CEP " else ""
         
         resumo <- resumo %>%
-            arrange(Quantidade, desc(CEP)) %>%   # com coord_flip, a maior fica no topo
+            arrange(Quantidade, desc(Grupo)) %>%   # com coord_flip, a maior fica no topo
             mutate(
-                CEP = factor(CEP, levels = unique(CEP)),
+                rotulo = str_wrap(paste0(prefixo, Grupo), 45),
+                rotulo = factor(rotulo, levels = unique(rotulo)),
                 dica = sprintf(
-                    "<b>CEP %s</b><br/>%s serventia(s)%s",
-                    htmltools::htmlEscape(as.character(CEP)),
+                    "<b>%s</b><br/>%s serventia(s)%s",
+                    htmltools::htmlEscape(paste0(prefixo, Grupo)),
                     format(Quantidade, big.mark = ".", decimal.mark = ","),
                     ifelse(Serventias == "", "", paste0("<hr style='margin:4px 0'/>", Serventias))
                 )
             )
         
-        p <- ggplot(resumo, aes(x = CEP, y = Quantidade)) +
-            geom_col_interactive(aes(tooltip = dica, data_id = CEP), fill = "#2C7FB8") +
+        p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
+            geom_col_interactive(aes(tooltip = dica, data_id = Grupo), fill = "#2C7FB8") +
             geom_text(aes(label = Quantidade), hjust = -0.2, size = 3.2) +
             coord_flip() +
             scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
             labs(
-                title = "Quantidade de Serventias por CEP",
-                subtitle = sprintf("Exibindo %d de %d CEP(s)", nrow(resumo), total_ceps),
+                title = sprintf("Quantidade de Serventias por %s", r$agrupar),
+                subtitle = sprintf("Exibindo %d de %d grupo(s)", nrow(resumo), total),
                 x = "",
                 y = "Quantidade"
             ) +
             theme_minimal()
         
+        linhas_rotulo <- sum(str_count(levels(resumo$rotulo), "\n") + 1)
+        
         girafe(
             ggobj = p,
             width_svg = 9,
-            height_svg = max(3, 0.28 * nrow(resumo) + 1.6),
+            height_svg = max(3, 0.28 * max(nrow(resumo), linhas_rotulo) + 1.6),
             options = list(
                 opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
                 opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
@@ -1007,6 +1136,7 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
     )
     
     list(
+        exibicao = exibicao,
         filtrados = filtrados,
         atualizar_combos = atualizar_combos,
         msg_sem_dados = msg_sem_dados
@@ -1484,6 +1614,8 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
         
         dados_base_filtrados <- aba_base$filtrados
         dados_envio_filtrados <- aba_envio$filtrados
+        base_exibicao <- aba_base$exibicao
+        envio_exibicao <- aba_envio$exibicao
         MSG_SEM_BASE <- aba_base$msg_sem_dados
         
         atualizar_combos_base <- function() {
@@ -2160,8 +2292,9 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
             df
         })
         
+        # Nomes no lugar dos códigos também na tabela de alertas.
         tabela_exibicao <- reactive({
-            consolidar_alertas_serventias_tabela(dados_filtrados())
+            traduzir_referencias_serventias(consolidar_alertas_serventias_tabela(dados_filtrados()))
         })
         
         output$tabela <- renderDT({
@@ -2365,7 +2498,8 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
         
         mod_inconsistencias_server(
             "inc",
-            dados = inconsistencias,
+            # Nomes no lugar dos códigos (município, competência...).
+            dados = reactive(traduzir_referencias_serventias(inconsistencias())),
             verificacoes = reactive({
                 lista <- list(
                     list(descricao = "O mesmo código em mais de um registro da base. Alta: dois ou mais registros ativos."),
