@@ -48,3 +48,26 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 .positai
+
+# =====================================================
+# FarolJus — dados e segredos NUNCA vão para o Git
+# -----------------------------------------------------
+# - data/*.db (e -wal/-shm do modo WAL): banco SQLite com as chaves TOTP
+#   dos usuários e a auditoria de login (quem tem a chave gera os
+#   códigos);
+# - planilhas/CSVs em data/: CPF, nome, nascimento, e-mail e situação
+#   funcional de pessoas reais (dados pessoais — LGPD);
+# - conf/: configurações locais com endereços internos de servidores;
+# - arquivos de trava do LibreOffice/Excel.
+# As pastas continuam existindo localmente; só deixam de ser versionadas.
+# =====================================================
+data/*.db
+data/*.db-*
+data/**/*.db
+data/**/*.db-*
+data/**/*.csv
+data/**/*.xlsx
+data/**/*.xls
+conf/
+.~lock.*
+~$*

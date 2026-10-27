@@ -1,5 +1,0 @@
-ldap:
-  server: "tjse.jus.br"
-  port: 636
-  domain: "tjse.jus.br"
-  search_base: "DC=tjse,DC=jus,DC=br"
