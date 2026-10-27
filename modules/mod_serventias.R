@@ -1,55 +1,48 @@
 # =====================================================
-# modules/mod_alertas_magistrados.R
+# modules/mod_serventias.R
 # -----------------------------------------------------
-# Módulo "Magistrados" (aba Magistrados do menu principal), com três
-# abas — mesma estrutura de mod_alertas_serventias.R:
+# Módulo "Serventias" (aba Serventias do menu principal), com três abas:
 #
-#   1) "Base de Dados - Magistrados" — cadastro de magistrados do
-#      MPM/CNJ, lido DIRETAMENTE de magistrados.xlsx (ou .csv). A tabela
-#      mostra as colunas do arquivo, na mesma ordem (Situação
-#      profissional atual e Cargo por extenso, quando houver
-#      nomenclatura cadastrada). Filtros: Status (padrão "Ativo", se a
-#      coluna existir), CPF, Nome, Cargo, Situação profissional atual,
-#      Órgão de lotação e Detalhe (busca o texto em todas as colunas).
-#      Gráfico com agrupamento selecionável.
+#   1) "Base de Dados - Serventias" — cadastro de serventias do MPM/CNJ,
+#      lido DIRETAMENTE da planilha serventias.xlsx (ou, se não houver
+#      planilha, de serventias.csv). A tabela mostra EXATAMENTE as
+#      colunas do arquivo, na mesma ordem. Filtros: Status
+#      (padrão "Ativo"), Código Serventia, Código da Unidade de Origem,
+#      Entrância e Detalhe (busca o texto em todas as colunas). Gráfico
+#      por CEP.
 #
-#   2) "Alertas - Magistrados" — arquivo de alertas de Magistrados do
-#      MPM, alertas_magistrados.csv (ou .xlsx). Filtros Alerta, Conflito,
-#      Cargo, CPF e Nome; alertas consolidados na tabela; gráficos por
-#      tipo de alerta e por Cargo; CSV.
+#   2) "Alertas - Serventias" — arquivo de alertas de Serventias do MPM,
+#      alertas_serventias.csv (ARQUIVO_ALERTAS_SERVENTIAS). Mesmo
+#      funcionamento de mod_pessoal_auxiliar.R (filtros, alertas consolidados na
+#      tabela, gráficos, CSV).
 #
-#   3) "Inconsistências - Magistrados" — verificações automáticas sobre a
-#      base (ver verificar_inconsistencias_magistrados()): cargo 4 com
-#      perfil de Desembargador(a) e Aposentadoria com perfil de
-#      afastamento. Tabela com o motivo de cada apontamento e CSV.
+#   3) "Inconsistências - Serventias" — verificações automáticas sobre a
+#      base (ver verificar_inconsistencias_serventias()), no mesmo
+#      formato da aba de inconsistências dos Magistrados: código
+#      duplicado, CEP ausente/inválido, nome repetido entre ativas e
+#      serventia inativa que ainda é lotação de magistrados/servidores.
 #
 # As abas 1 e 2 têm Tabela, Gráfico e Gerar arquivo CSV.
 #
-# Os dois arquivos ficam na subpasta de magistrados da empresa:
+# Os dois arquivos ficam na subpasta de serventias da empresa:
 #
-#   <PASTA_ALERTAS>/<EMPRESA>/magistrados/magistrados.xlsx          (ou .csv)
-#   <PASTA_ALERTAS>/<EMPRESA>/magistrados/alertas_magistrados.csv   (ou .xlsx)
+#   <PASTA_ALERTAS>/<EMPRESA>/serventias/serventias.xlsx   (ou .csv)
+#   <PASTA_ALERTAS>/<EMPRESA>/serventias/alertas_serventias.csv   (ou .xlsx)
 #
-# Se existirem .xlsx e .csv do mesmo tipo, o .xlsx tem prioridade.
+# Os dois formatos (.xlsx e .csv) são aceitos para os dois arquivos; se
+# existirem os dois para o mesmo tipo, o .xlsx tem prioridade.
 #
 # "Gerenciar Arquivos" (comum às duas abas) apaga cada arquivo
 # separadamente e envia um ou dois arquivos de uma vez. O TIPO de cada
 # arquivo enviado é identificado pelas colunas (ver
-# identificar_tipo_arquivo_magistrados()), e ele é gravado com o nome
-# fixo correspondente + a extensão original.
+# identificar_tipo_arquivo_serventias()), e ele é gravado com o nome fixo
+# correspondente + a extensão original (serventias.xlsx,
+# alertas_serventias.csv...), qualquer que seja o nome original.
 #
-# CÓDIGOS -> NOMENCLATURA: "Situação profissional atual" e "Cargo" vêm
-# como código no arquivo do MPM. A correspondência fica em dois vetores
-# R deste arquivo (SITUACAO_PROFISSIONAL_MAGISTRADO e CARGO_MAGISTRADO),
-# PRÓPRIOS dos magistrados — a codificação é diferente da do Quadro de
-# Pessoal. Sem banco de dados: tudo roda só em R, sobre os arquivos
-# enviados. Um código sem nomenclatura cadastrada é exibido como veio.
+# Tudo roda só em R, sobre os arquivos enviados — sem banco de dados.
 #
-# DEPENDÊNCIA: reaproveita funções/constantes definidas em mod_alertas.R
+# DEPENDÊNCIA: reaproveita funções/constantes definidas em mod_pessoal_auxiliar.R
 # e mod_inconsistencias.R — precisa ser carregado DEPOIS deles no app.R.
-# Todos os nomes globais deste arquivo são exclusivos (sufixo/prefixo
-# "magistrado"/"mag_") para não colidir com os de
-# mod_alertas_serventias.R.
 # =====================================================
 
 library(shiny)
@@ -61,33 +54,20 @@ library(ggplot2)
 library(DT)
 library(echarts4r)
 library(ggiraph)
-library(readxl)
+library(readxl)   # leitura direta de .xlsx
 
 local({
     
     dependencias <- c(
         "MAX_UPLOAD_MB",
-        "SUBPASTA_MAGISTRADOS",
+        "SUBPASTA_SERVENTIAS",
         "caminho_alertas",
         "tempo_decorrido",
+        "ler_arquivo_alertas",
         "colunas_por_prefixo",
         "colunas_com_dados",
         "consolidar_colunas_por_linha",
         "normalizar_nome_coluna",
-        "codigo_para_nomenclatura",
-        "codigo_limpo",
-        "converter_data",
-        "formatar_data",
-        "lotacoes_ativas_pessoas",
-        "remover_registros_excluidos",
-        "novo_envio_vazio",
-        "ui_novo_envio",
-        "chave_cpf",
-        "data_formato_envio",
-        "rotular_orgaos",
-        "gravar_arquivo_substituindo",
-        "mod_inconsistencias_ui",
-        "mod_inconsistencias_server",
         "EXTENSOES_PLANILHA",
         "ROTULO_VALOR_VAZIO",
         "extensao_arquivo",
@@ -101,22 +81,23 @@ local({
         "normalizar_texto_busca",
         "texto_busca_linhas",
         "ui_csv_dados",
-        "grafico_barras_girafe",
         "normalizar_nome_arquivo",
-        "REGEX_COL_CPF",
-        "REGEX_COL_NOME",
-        "REGEX_COL_SITUACAO",
-        "REGEX_COL_CARGO",
-        "REGEX_COL_SEXO",
-        "REGEX_COL_NATURALIDADE"
+        "codigo_limpo",
+        "status_ativo",
+        "chave_nome_orgao",
+        "indice_serventias",
+        "carregar_lotacoes_servidores_empresa",
+        "gravar_arquivo_substituindo",
+        "mod_inconsistencias_ui",
+        "mod_inconsistencias_server"
     )
     
     faltando <- dependencias[!vapply(dependencias, exists, logical(1))]
     
     if (length(faltando) > 0) {
         stop(
-            "mod_alertas_magistrados.R precisa ser carregado depois de ",
-            "mod_alertas.R e mod_inconsistencias.R. Não encontrado: ",
+            "mod_serventias.R precisa ser carregado depois de ",
+            "mod_pessoal_auxiliar.R e mod_inconsistencias.R. Não encontrado: ",
             paste(faltando, collapse = ", ")
         )
     }
@@ -127,41 +108,51 @@ local({
 # ARQUIVOS DO MÓDULO
 # -----------------------------------------------------
 # Cada tipo tem um nome fixo (radical) e pode estar em .xlsx ou .csv.
-# A ordem de EXTENSOES_PLANILHA (mod_alertas.R) define a prioridade.
+# EXTENSOES_SERVENTIAS também define a PRIORIDADE de leitura: se houver
+# serventias.xlsx e serventias.csv na pasta, vale o .xlsx. A comparação
+# de nome não diferencia maiúsculas/minúsculas.
 # =====================================================
 
-TIPOS_ARQUIVO_MAGISTRADOS <- list(
+EXTENSOES_SERVENTIAS <- EXTENSOES_PLANILHA   # definida em mod_pessoal_auxiliar.R
+
+TIPOS_ARQUIVO_SERVENTIAS <- list(
     base = list(
-        radical = "magistrados",
-        rotulo = "Base de Dados - Magistrados"
+        radical = "serventias",
+        rotulo = "Base de Dados - Serventias"
     ),
     # Arquivo que o órgão envia ao MPM (mesmo layout da base). Reconhecido
     # no upload por ter "envio" no nome do arquivo (como em Pessoal e
     # Auxiliar).
     envio = list(
-        radical = "magistrados_envio",
-        rotulo = "Envio - Magistrados"
+        radical = "serventias_envio",
+        rotulo = "Envio - Serventias"
     ),
     alertas = list(
-        radical = "alertas_magistrados",
-        rotulo = "Alertas - Magistrados"
+        radical = "alertas_serventias",
+        rotulo = "Alertas - Serventias"
     )
 )
 
-ARQUIVO_BASE_MAGISTRADOS <- "magistrados.xlsx"
-ARQUIVO_ALERTAS_MAGISTRADOS <- "alertas_magistrados.csv"
-ARQUIVO_ENVIO_MAGISTRADOS <- "magistrados_envio.xlsx"
+# Nomes "principais" de cada tipo, usados nas mensagens.
+ARQUIVO_BASE_SERVENTIAS <- "serventias.xlsx"
+ARQUIVO_ALERTAS_SERVENTIAS <- "alertas_serventias.csv"
+ARQUIVO_ENVIO_SERVENTIAS <- "serventias_envio.xlsx"
 
-# Subpasta de magistrados da empresa (<PASTA_ALERTAS>/<EMPRESA>/magistrados).
-pasta_magistrados <- function(empresa) {
-    caminho_alertas(empresa, SUBPASTA_MAGISTRADOS)
+# Subpasta de serventias da empresa (<PASTA_ALERTAS>/<EMPRESA>/serventias).
+pasta_serventias <- function(empresa) {
+    caminho_alertas(empresa, SUBPASTA_SERVENTIAS)
 }
 
-# Arquivos do tipo existentes na pasta, na ordem de prioridade (.xlsx
-# antes de .csv). Nome comparado de forma tolerante
-# (normalizar_nome_arquivo(), de mod_alertas.R): "Magistrados.xlsx" ou
-# "Alertas Magistrados.csv" também são reconhecidos.
-mag_arquivos_do_tipo <- function(pasta, tipo) {
+# Nomes aceitos para o tipo: "serventias.xlsx", "serventias.csv"...
+nomes_aceitos_tipo <- function(tipo) {
+    paste0(TIPOS_ARQUIVO_SERVENTIAS[[tipo]]$radical, ".", EXTENSOES_SERVENTIAS)
+}
+
+# Arquivos do tipo existentes na pasta, na ordem de prioridade de
+# leitura (.xlsx antes de .csv). O nome é comparado de forma tolerante
+# (normalizar_nome_arquivo(), de mod_pessoal_auxiliar.R): "Serventias.xlsx" ou
+# "Alertas Serventias.csv" também são reconhecidos.
+arquivos_do_tipo <- function(pasta, tipo) {
     
     if (is.null(pasta) || !dir.exists(pasta)) {
         return(character(0))
@@ -169,80 +160,77 @@ mag_arquivos_do_tipo <- function(pasta, tipo) {
     
     existentes <- list.files(pasta, full.names = TRUE)
     
-    ok <- extensao_arquivo(existentes) %in% EXTENSOES_PLANILHA &
-        normalizar_nome_arquivo(existentes) == TIPOS_ARQUIVO_MAGISTRADOS[[tipo]]$radical
+    ok <- extensao_arquivo(existentes) %in% EXTENSOES_SERVENTIAS &
+        normalizar_nome_arquivo(existentes) == TIPOS_ARQUIVO_SERVENTIAS[[tipo]]$radical
     
     achados <- existentes[ok]
-    achados[order(match(extensao_arquivo(achados), EXTENSOES_PLANILHA))]
+    achados[order(match(extensao_arquivo(achados), EXTENSOES_SERVENTIAS))]
     
 }
 
-mag_arquivo_do_tipo <- function(pasta, tipo) {
-    achados <- mag_arquivos_do_tipo(pasta, tipo)
+# Arquivo do tipo que será lido (o de maior prioridade), ou NULL.
+arquivo_do_tipo <- function(pasta, tipo) {
+    achados <- arquivos_do_tipo(pasta, tipo)
     if (length(achados) > 0) achados[1] else NULL
 }
 
 # =====================================================
-# LEITURA E CARREGAMENTO (.xlsx ou .csv)
+# LEITURA E CARREGAMENTO (vale para os dois arquivos, .xlsx ou .csv)
+# -----------------------------------------------------
+# Usa as funções genéricas de mod_pessoal_auxiliar.R: ler_arquivo_dados()
+# (planilha pela aba "serventias", se existir; CSV com ";" e fallback) e
+# limpar_dados_lidos() (colunas sem nome vazias, BOM, espaços,
+# duplicadas). Todas as colunas ficam como texto, na ordem do arquivo.
 # =====================================================
 
-ler_arquivo_magistrados <- function(caminho, extensao = extensao_arquivo(caminho),
-                                    nome_exibicao = basename(caminho), n_max = Inf) {
-    ler_arquivo_dados(caminho, extensao, nome_exibicao, aba_preferida = "magistrados", n_max = n_max)
+ler_arquivo_serventias <- function(caminho, extensao = extensao_arquivo(caminho),
+                                   nome_exibicao = basename(caminho), n_max = Inf) {
+    ler_arquivo_dados(caminho, extensao, nome_exibicao, aba_preferida = "serventias", n_max = n_max)
 }
 
-carregar_arquivo_magistrados <- function(arquivo) {
+carregar_arquivo_serventias <- function(arquivo) {
     
     if (is.null(arquivo) || !file.exists(arquivo)) {
         return(data.frame())
     }
     
     # Lido e limpo uma vez por processo e reaproveitado por todas as sessões (e pelos outros módulos e pelo Painel) enquanto o arquivo não mudar — ver com_cache_arquivo() em R/utils.R.
-    com_cache_arquivo(arquivo, "magistrados", function() {
-        limpar_dados_lidos(ler_arquivo_magistrados(arquivo))
+    com_cache_arquivo(arquivo, "serventias", function() {
+        limpar_dados_lidos(ler_arquivo_serventias(arquivo))
     })
     
 }
 
 # =====================================================
-# COLUNAS (nome normalizado: sem acento, minúsculo)
+# COLUNAS (localização tolerante a variações de cabeçalho)
 # -----------------------------------------------------
-# CPF, Nome, Situação profissional, Cargo, Sexo e Naturalidade usam as
-# regex já definidas em mod_alertas.R. As regex são ancoradas no início
-# do nome, então "Alerta: Cargo" nunca é confundida com "Cargo".
+# Compara pelo nome normalizado (sem acento, minúsculo) contra uma
+# expressão regular. Devolve o NOME da coluna, ou NULL se não houver.
 # =====================================================
 
-REGEX_COL_ORGAO_MAGISTRADO <- "^orgao de lotacao"
-REGEX_COL_STATUS_MAGISTRADO <- "^status$"
-REGEX_COL_RACA_MAGISTRADO <- "^raca"
-REGEX_COL_PROMOCAO_MAGISTRADO <- "^forma de promocao"
+REGEX_COL_CODIGO_SERVENTIA <- "^codigo( da)? serventia$"
+REGEX_COL_NOME_SERVENTIA <- "^nome( da)? serventia$"
+REGEX_COL_STATUS <- "^status$"
+REGEX_COL_CEP <- "^cep$"
+REGEX_COL_UNIDADE_ORIGEM <- "^codigo da unidade de origem"
+REGEX_COL_ENTRANCIA <- "^entrancia$"
 
-# Assinatura do arquivo de magistrados do MPM: a coluna "Órgão de
-# lotação do magistrado(a)". Distingue dos arquivos do Quadro de Pessoal
-# ("Órgão de lotação do(a) Servidor(a) ou Auxiliar"), que também têm CPF.
-REGEX_ASSINATURA_MAGISTRADO <- "^orgao de lotacao do\\(?a?\\)? ?magistrad"
-
-# Opções de agrupamento do gráfico da base (rótulo -> regex da coluna).
-AGRUPAMENTOS_BASE_MAGISTRADOS <- c(
-    "Cargo"                        = REGEX_COL_CARGO,
-    "Situação profissional atual"  = REGEX_COL_SITUACAO,
-    "Órgão de lotação"             = REGEX_COL_ORGAO_MAGISTRADO,
-    "Forma de promoção"            = REGEX_COL_PROMOCAO_MAGISTRADO,
-    "Sexo"                         = REGEX_COL_SEXO,
-    "Raça / Cor"                   = REGEX_COL_RACA_MAGISTRADO,
-    "Naturalidade"                 = REGEX_COL_NATURALIDADE,
-    "Status"                       = REGEX_COL_STATUS_MAGISTRADO
-)
+# Funções genéricas de mod_pessoal_auxiliar.R, com os nomes usados neste módulo.
+coluna_serventia <- coluna_por_regex
+valores_coluna_exibicao <- valores_coluna_regex
+ROTULO_SERV_VAZIO <- ROTULO_VALOR_VAZIO
 
 # =====================================================
 # IDENTIFICAÇÃO DO TIPO DE ARQUIVO (upload)
 # -----------------------------------------------------
-#   - sem CPF ou sem "Órgão de lotação do magistrado(a)"       -> NA
-#   - com colunas "Alerta..."/"Conflito..."                     -> alertas
-#   - sem colunas de alerta                                     -> base
+#   - tem "Código Serventia" e colunas "Alerta..."/"Conflito..." -> alertas
+#   - tem "Código Serventia" e "CEP", sem colunas de alerta     -> base
+#   - qualquer outra coisa                                      -> NA
+# Evita, por exemplo, gravar um arquivo do Quadro de Pessoal (ou a base
+# no lugar dos alertas) por engano.
 # =====================================================
 
-identificar_tipo_arquivo_magistrados <- function(df, nome_arquivo = NULL) {
+identificar_tipo_arquivo_serventias <- function(df, nome_arquivo = NULL) {
     
     if (is.null(df) || ncol(df) == 0) {
         return(NA_character_)
@@ -250,15 +238,20 @@ identificar_tipo_arquivo_magistrados <- function(df, nome_arquivo = NULL) {
     
     names(df) <- limpar_cabecalho(names(df))
     
-    if (is.null(coluna_por_regex(df, REGEX_COL_CPF)) ||
-        is.null(coluna_por_regex(df, REGEX_ASSINATURA_MAGISTRADO))) {
+    if (is.null(coluna_serventia(df, REGEX_COL_CODIGO_SERVENTIA))) {
         return(NA_character_)
     }
     
-    tem_alertas <- any(str_starts(names(df), "Alerta") | str_starts(names(df), "Conflito"))
+    tem_alertas <- any(
+        str_starts(names(df), "Alerta") | str_starts(names(df), "Conflito")
+    )
     
     if (tem_alertas) {
         return("alertas")
+    }
+    
+    if (is.null(coluna_serventia(df, REGEX_COL_CEP))) {
+        return(NA_character_)
     }
     
     # Sem colunas de alerta: base ou envio. É envio quando o nome do
@@ -268,71 +261,55 @@ identificar_tipo_arquivo_magistrados <- function(df, nome_arquivo = NULL) {
     # "Magistrados_i.xlsx", "serventias_i.xlsx").
     eh_envio <- (!is.null(nome_arquivo) && length(nome_arquivo) == 1 && !is.na(nome_arquivo) &&
         str_detect(normalizar_nome_arquivo(nome_arquivo), REGEX_NOME_ARQUIVO_ENVIO)) ||
-        is.null(coluna_por_regex(df, REGEX_COL_STATUS_MAGISTRADO))
+        is.null(coluna_serventia(df, REGEX_COL_STATUS))
     
     if (eh_envio) "envio" else "base"
     
 }
 
 # =====================================================
-# CÓDIGO -> NOMENCLATURA (Situação profissional atual e Cargo)
-# -----------------------------------------------------
-# Vetores próprios dos magistrados (a codificação é diferente da do
-# Quadro de Pessoal), conforme as Tabelas Auxiliares do MPM/CNJ
-# (seq_cargo/dsc_cargo e Situação profissional atual do Quadro de
-# Magistrados). Para ajustar uma nomenclatura, edite o vetor aqui mesmo.
+# BASE DE DADOS — BUSCA "DETALHE" E CEP
 # =====================================================
 
-SITUACAO_PROFISSIONAL_MAGISTRADO <- c(
-    "1"  = "Presidente",
-    "2"  = "Vice-Presidente",
-    "3"  = "Corregedor",
-    "4"  = "Ouvidor",
-    "5"  = "Diretor de Escola da Magistratura",
-    "6"  = "Juiz(a) convocado(a) para substituição de Desembargador(a) ou Ministro(a)",
-    "7"  = "Juiz(a) Auxiliar ou Juiz(a) Instrutor(a) que atua em Tribunal/Conselho",
-    "8"  = "Ocupante de cargo próprio na Jurisdição",
-    "9"  = "Afastado(a)",
-    "10" = "Aposentadoria",
-    "11" = "Ingresso por Remoção",
-    "12" = "Saída por Remoção",
-    "13" = "Falecimento",
-    "14" = "Exoneração/Vacância",
-    "15" = "Diretor de Foro",
-    "16" = "Convocado(a) para atuação em auxílio",
-    "17" = "Outra situação",
-    "18" = "Ocupante de cargo em acumulação na Jurisdição",
-    "19" = "Ingresso",
-    "20" = "Saída"
-)
+# O filtro Detalhe usa normalizar_texto_busca() e texto_busca_linhas(),
+# definidas em mod_pessoal_auxiliar.R.
 
-CARGO_MAGISTRADO <- c(
-    "1" = "Juiz(a) Titular",
-    "2" = "Juiz(a) Substituto(a)",
-    "3" = "Desembargador(a)",
-    "4" = "Juiz(a) substituto(a) de 2º grau"
-)
 
-# Troca código por nomenclatura nas colunas Situação profissional atual
-# e Cargo (se existirem). Só para exibição.
-traduzir_codigos_magistrados <- function(df) {
+# CEP para exibição no gráfico: "49010080" -> "49010-080". O que não
+# tiver 8 dígitos é mantido como veio; vazio vira "(Não informado)".
+formatar_cep <- function(x) {
     
-    if (is.null(df) || nrow(df) == 0) {
-        return(df)
+    x <- str_trim(as.character(x))
+    digitos <- str_remove_all(x, "\\D")
+    
+    ifelse(
+        is.na(x) | x == "",
+        ROTULO_SERV_VAZIO,
+        ifelse(
+            nchar(digitos) == 8,
+            paste0(substr(digitos, 1, 5), "-", substr(digitos, 6, 8)),
+            x
+        )
+    )
+    
+}
+
+# Lista de nomes para o tooltip do gráfico por CEP (no máximo `max`).
+resumir_nomes <- function(nomes, max = 10) {
+    
+    nomes <- sort(unique(nomes[!is.na(nomes) & nomes != ""]))
+    
+    if (length(nomes) == 0) {
+        return("")
     }
     
-    col_situacao <- coluna_por_regex(df, REGEX_COL_SITUACAO)
-    col_cargo <- coluna_por_regex(df, REGEX_COL_CARGO)
+    texto <- paste(htmltools::htmlEscape(head(nomes, max)), collapse = "<br/>")
     
-    if (!is.null(col_situacao)) {
-        df[[col_situacao]] <- codigo_para_nomenclatura(df[[col_situacao]], SITUACAO_PROFISSIONAL_MAGISTRADO)
+    if (length(nomes) > max) {
+        texto <- paste0(texto, sprintf("<br/><i>... e mais %d</i>", length(nomes) - max))
     }
     
-    if (!is.null(col_cargo)) {
-        df[[col_cargo]] <- codigo_para_nomenclatura(df[[col_cargo]], CARGO_MAGISTRADO)
-    }
-    
-    df
+    texto
     
 }
 
@@ -344,7 +321,7 @@ traduzir_codigos_magistrados <- function(df) {
 # "Conflito(s) Detectado" só aparece se o arquivo tiver conflitos.
 # =====================================================
 
-consolidar_alertas_magistrados_tabela <- function(df) {
+consolidar_alertas_serventias_tabela <- function(df) {
     
     if (is.null(df) || nrow(df) == 0) {
         return(df)
@@ -369,487 +346,315 @@ consolidar_alertas_magistrados_tabela <- function(df) {
 # =====================================================
 # INCONSISTÊNCIAS — VERIFICAÇÕES AUTOMÁTICAS NA BASE
 # -----------------------------------------------------
-# Rodam sobre a base de magistrados com os CÓDIGOS originais (antes da
-# tradução) e apontam padrões que contrariam as Tabelas Auxiliares do
-# MPM. São indícios para conferência, não correções automáticas.
+# Mesma "inteligência" da aba de inconsistências dos Magistrados,
+# adaptada ao cadastro de Serventias. Rodam sobre a base (serventias.xlsx
+# / .csv) e apontam padrões que contrariam o cadastro do MPM/CNJ. São
+# indícios para conferência, não correções automáticas.
 #
-#   1) CARGO 4 COM PERFIL DE DESEMBARGADOR
-#      Cargo 4 = "Juiz(a) substituto(a) de 2º grau". Um CPF com cargo 4
-#      é apontado quando, em algum registro com cargo 4:
-#        - exerce situação privativa de desembargador (1 Presidente,
-#          2 Vice-Presidente, 3 Corregedor, 4 Ouvidor, 5 Diretor de
-#          Escola da Magistratura); e/ou
-#        - está lotado em gabinete de desembargador (nome da serventia
-#          "G-<nº> DES./DESA. ...", lido da base de Serventias da
-#          empresa, se ela tiver sido enviada).
-#      Gravidade Alta com as duas evidências; Média com uma.
+#   1) CÓDIGO DE SERVENTIA DUPLICADO
+#      O mesmo "Código Serventia" em mais de um registro da base.
+#      Alta se dois ou mais registros estão ativos; Média nos demais.
 #
-#   2) APOSENTADORIA (SITUAÇÃO 10) COM PERFIL DE AFASTAMENTO
-#      Aposentadoria é situação definitiva: não deveria ter data de
-#      saída nem ser seguida de nova situação do mesmo magistrado. Um
-#      registro com situação 10 é apontado quando:
-#        - tem data de saída; e/ou
-#        - o mesmo CPF tem registro posterior em outra situação (retorno).
-#      Gravidade Alta se houve retorno ou se durou até
-#      LIMITE_DIAS_APOSENTADORIA_CURTA dias (perfil de férias/licença,
-#      que deveria ir como 9 - Afastado(a)); Média nos demais casos.
+#   2) CEP AUSENTE OU INVÁLIDO (só serventias ativas)
+#      Alta: CEP que não tem 8 dígitos ou é uma sequência repetida
+#      ("00000000"); Média: CEP não informado.
+#
+#   3) NOME REPETIDO ENTRE SERVENTIAS ATIVAS
+#      Duas ou mais serventias ATIVAS, com códigos diferentes, com o
+#      mesmo nome (sem diferenciar acentos/maiúsculas). Média.
+#
+#   4) SERVENTIA INATIVA COM LOTAÇÃO ATIVA
+#      Serventia com status diferente de "Ativo" que ainda é a lotação
+#      ATUAL (último registro do CPF, em situação não encerrada) de
+#      magistrados (base do módulo Magistrados) e/ou servidores
+#      (arquivos de alertas do Quadro de Pessoal). Casada pelo código ou
+#      pelo nome. Alta. Só roda se a base tiver a coluna Status e se ao
+#      menos um desses arquivos tiver sido enviado.
 # =====================================================
 
-CARGO_MAG_DESEMBARGADOR <- "3"
-CARGO_MAG_SUBSTITUTO_2GRAU <- "4"
-SITUACOES_MAG_DIRECAO <- c("1", "2", "3", "4", "5")
-SITUACAO_MAG_APOSENTADORIA <- "10"
-LIMITE_DIAS_APOSENTADORIA_CURTA <- 60
+VERIFICACAO_SRV_CODIGO <- "Código de serventia duplicado"
+VERIFICACAO_SRV_CEP <- "CEP ausente ou inválido"
+VERIFICACAO_SRV_NOME <- "Nome repetido entre serventias ativas"
+VERIFICACAO_SRV_LOTACAO <- "Serventia inativa com lotação ativa"
 
-VERIFICACAO_MAG_CARGO <- "Cargo 4 com perfil de Desembargador(a)"
-VERIFICACAO_MAG_APOSENTADORIA <- "Aposentadoria com perfil de afastamento"
+VERIFICACOES_SERVENTIAS <- c(
+    VERIFICACAO_SRV_CODIGO,
+    VERIFICACAO_SRV_CEP,
+    VERIFICACAO_SRV_NOME,
+    VERIFICACAO_SRV_LOTACAO
+)
 
-REGEX_COL_INICIO_SITUACAO_MAG <- "^data de inicio da situacao"
-REGEX_COL_SAIDA_SITUACAO_MAG <- "^data de saida da situacao"
+FILTROS_TEXTO_INC_SERVENTIAS <- c(
+    "Código Serventia" = "Código Serventia",
+    "Nome da Serventia" = "Nome da Serventia"
+)
 
-# Nome de gabinete de desembargador na base de Serventias do TJSE:
-# "G-11 DES. ROBERTO ...", "G-13 DESA. ANA ...".
-REGEX_GABINETE_DESEMBARGADOR <- "^G-?\\s*\\d+\\s+DESA?\\b"
-
-# Funções genéricas de mod_alertas.R, com os nomes usados neste módulo:
-# códigos "4.0" -> "4"; datas dd/mm/aaaa, aaaa-mm-dd ou serial do Excel.
-mag_codigo <- codigo_limpo
-mag_data <- converter_data
-mag_fmt_data <- formatar_data
-
-# Mapa código -> nome da serventia a partir da base de Serventias da
-# empresa (módulo mod_alertas_serventias.R). Vetor nomeado vazio se o
-# módulo não estiver carregado ou a base não tiver sido enviada.
-mag_nomes_orgaos <- function(empresa) {
-    
-    necessarias <- c(
-        "pasta_serventias", "arquivo_do_tipo", "carregar_arquivo_serventias",
-        "REGEX_COL_CODIGO_SERVENTIA", "REGEX_COL_NOME_SERVENTIA"
-    )
-    
-    if (!all(vapply(necessarias, exists, logical(1)))) {
-        return(character(0))
-    }
-    
-    tryCatch({
-        s <- carregar_arquivo_serventias(arquivo_do_tipo(pasta_serventias(empresa), "base"))
-        col_cod <- coluna_por_regex(s, REGEX_COL_CODIGO_SERVENTIA)
-        col_nome <- coluna_por_regex(s, REGEX_COL_NOME_SERVENTIA)
-        
-        if (nrow(s) == 0 || is.null(col_cod) || is.null(col_nome)) {
-            return(character(0))
-        }
-        
-        mapa <- s[[col_nome]]
-        names(mapa) <- mag_codigo(s[[col_cod]])
-        mapa[!duplicated(names(mapa))]
-    }, error = function(e) character(0))
-    
-}
-
-# Estrutura (vazia) do resultado das verificações.
-inconsistencias_magistrados_vazio <- function() {
+inconsistencias_serventias_vazio <- function() {
     tibble(
         `Verificação` = character(0),
         Gravidade = character(0),
-        CPF = character(0),
-        Nome = character(0),
-        `Órgão de lotação` = character(0),
-        Cargo = character(0),
-        `Situação profissional atual` = character(0),
-        `Data de início da situação` = character(0),
-        `Data de saída da situação` = character(0),
-        `Duração (dias)` = integer(0),
+        `Código Serventia` = character(0),
+        `Nome da Serventia` = character(0),
         Status = character(0),
+        CEP = character(0),
         Motivo = character(0)
     )
 }
 
-# Executa as duas verificações. `base` = dados_base() (códigos crus);
-# `nomes_orgaos` = mag_nomes_orgaos(). Devolve uma linha por registro
-# da base apontado, com o motivo por extenso.
-verificar_inconsistencias_magistrados <- function(base, nomes_orgaos = character(0)) {
+# Lista curta de nomes para o Motivo ("A, B, C e mais 4").
+listar_nomes_motivo <- function(nomes, max = 5) {
+    nomes <- sort(unique(nomes[!is.na(nomes) & nomes != ""]))
+    if (length(nomes) == 0) {
+        return("")
+    }
+    texto <- paste(head(nomes, max), collapse = ", ")
+    if (length(nomes) > max) {
+        texto <- paste0(texto, sprintf(" e mais %d", length(nomes) - max))
+    }
+    texto
+}
+
+# Lotações atuais de magistrados e servidores da empresa (para a
+# verificação 4). Cada parte só entra se o respectivo módulo estiver
+# carregado e o arquivo tiver sido enviado.
+carregar_lotacoes_empresa <- function(empresa) {
     
-    vazio <- inconsistencias_magistrados_vazio()
+    partes <- list(
+        carregar_lotacoes_servidores_empresa(empresa) %>% mutate(tipo = "servidor")
+    )
+    
+    if (exists("carregar_lotacoes_magistrados_empresa")) {
+        partes <- c(
+            partes,
+            list(carregar_lotacoes_magistrados_empresa(empresa) %>% mutate(tipo = "magistrado"))
+        )
+    }
+    
+    bind_rows(partes)
+    
+}
 
-    # Registros marcados como "Exclusão de registro por erro" = S não
-    # entram nas verificações (remover_registros_excluidos(), mod_alertas.R).
-    base <- remover_registros_excluidos(base)
-
+# `base` = dados_base() (como veio no arquivo); `lotacoes` =
+# carregar_lotacoes_empresa().
+verificar_inconsistencias_serventias <- function(base, lotacoes = NULL) {
+    
+    vazio <- inconsistencias_serventias_vazio()
+    
     if (is.null(base) || nrow(base) == 0) {
         return(vazio)
     }
-
-    col <- function(regex) coluna_por_regex(base, regex)
+    
     valor <- function(regex) {
-        c <- col(regex)
+        c <- coluna_serventia(base, regex)
         if (is.null(c)) rep(NA_character_, nrow(base)) else as.character(base[[c]])
     }
     
-    if (is.null(col(REGEX_COL_CPF)) || is.null(col(REGEX_COL_CARGO)) || is.null(col(REGEX_COL_SITUACAO))) {
-        return(vazio)
-    }
+    tem_status <- !is.null(coluna_serventia(base, REGEX_COL_STATUS))
     
     d <- tibble(
-        CPF = valor(REGEX_COL_CPF),
-        Nome = valor(REGEX_COL_NOME),
-        orgao = mag_codigo(valor(REGEX_COL_ORGAO_MAGISTRADO)),
-        cargo = mag_codigo(valor(REGEX_COL_CARGO)),
-        situacao = mag_codigo(valor(REGEX_COL_SITUACAO)),
-        inicio = mag_data(valor(REGEX_COL_INICIO_SITUACAO_MAG)),
-        saida = mag_data(valor(REGEX_COL_SAIDA_SITUACAO_MAG)),
-        Status = valor(REGEX_COL_STATUS_MAGISTRADO)
+        codigo = codigo_limpo(valor(REGEX_COL_CODIGO_SERVENTIA)),
+        nome = valor(REGEX_COL_NOME_SERVENTIA),
+        status = valor(REGEX_COL_STATUS),
+        cep = valor(REGEX_COL_CEP)
     ) %>%
         mutate(
-            nome_orgao = unname(nomes_orgaos[orgao]),
-            orgao_exibicao = ifelse(is.na(nome_orgao), orgao, paste0(orgao, " - ", nome_orgao)),
-            gabinete_des = !is.na(nome_orgao) &
-                str_detect(
-                    str_to_upper(stringi::stri_trans_general(nome_orgao, "Latin-ASCII")),
-                    REGEX_GABINETE_DESEMBARGADOR
-                )
+            .linha = row_number(),
+            # Sem coluna Status (ou status vazio), conta como ativa.
+            ativa = is.na(status) | str_trim(status) == "" | status_ativo(status),
+            chave_nome = chave_nome_orgao(nome)
         )
     
     montar <- function(x, verificacao) {
+        if (is.null(x) || nrow(x) == 0) {
+            return(vazio)
+        }
         tibble(
             `Verificação` = verificacao,
             Gravidade = x$Gravidade,
-            CPF = x$CPF,
-            Nome = x$Nome,
-            `Órgão de lotação` = x$orgao_exibicao,
-            Cargo = x$cargo,
-            `Situação profissional atual` = x$situacao,
-            `Data de início da situação` = mag_fmt_data(x$inicio),
-            `Data de saída da situação` = mag_fmt_data(x$saida),
-            `Duração (dias)` = as.integer(x$saida - x$inicio),
-            Status = x$Status,
+            `Código Serventia` = x$codigo,
+            `Nome da Serventia` = x$nome,
+            Status = x$status,
+            CEP = formatar_cep(x$cep),
             Motivo = x$Motivo
         )
     }
     
-    # ---- 1) Cargo 4 com perfil de Desembargador ----
+    # ---- 1) Código duplicado ----
     
-    rotulo_sit <- SITUACAO_PROFISSIONAL_MAGISTRADO
-    
-    c4 <- d %>% filter(cargo == CARGO_MAG_SUBSTITUTO_2GRAU)
-    
-    evid <- c4 %>%
-        group_by(CPF) %>%
-        summarise(
-            direcao = paste(
-                unique(na.omit(ifelse(situacao %in% SITUACOES_MAG_DIRECAO, rotulo_sit[situacao], NA))),
-                collapse = ", "
-            ),
-            gabinetes = paste(unique(nome_orgao[gabinete_des]), collapse = "; "),
-            .groups = "drop"
-        ) %>%
-        filter(direcao != "" | gabinetes != "") %>%
+    r1 <- d %>%
+        filter(!is.na(codigo) & codigo != "") %>%
+        group_by(codigo) %>%
+        filter(n() > 1) %>%
         mutate(
-            Gravidade = ifelse(direcao != "" & gabinetes != "", "Alta", "Média"),
-            Motivo = paste0(
-                "Cadastrado(a) como Juiz(a) substituto(a) de 2º grau (cargo 4), mas ",
-                ifelse(direcao != "", paste0("exerce ", direcao, " (situação privativa de desembargador)"), ""),
-                ifelse(direcao != "" & gabinetes != "", " e ", ""),
-                ifelse(gabinetes != "", paste0("está lotado(a) em gabinete de desembargador (", gabinetes, ")"), ""),
-                ". Provável Desembargador(a) - cargo 3."
+            Gravidade = ifelse(sum(ativa) >= 2, "Alta", "Média"),
+            Motivo = sprintf(
+                "O código %s aparece em %d registros da base (status: %s).",
+                codigo, n(), paste(unique(coalesce(status, "não informado")), collapse = ", ")
             )
-        )
+        ) %>%
+        ungroup() %>%
+        arrange(codigo, .linha)
     
-    r1 <- c4 %>%
-        inner_join(evid %>% select(CPF, Gravidade, Motivo), by = "CPF") %>%
-        arrange(Nome, inicio)
+    # ---- 2) CEP ausente ou inválido (ativas) ----
     
-    # ---- 2) Aposentadoria com perfil de afastamento ----
-    
-    ap <- d %>%
-        mutate(.linha = row_number()) %>%
-        filter(situacao == SITUACAO_MAG_APOSENTADORIA)
-    
-    # Retorno = registro posterior em situação ATIVA. Outra situação
-    # encerrada depois da aposentadoria (ex.: 13 Falecimento) não é
-    # retorno — antes, todo aposentado que depois faleceu saía como
-    # "volta como Falecimento", gravidade Alta.
-    outras <- d %>% filter(!(situacao %in% SITUACOES_MAG_ENCERRADAS), !is.na(inicio))
-    
-    retorno <- if (nrow(ap) > 0 && nrow(outras) > 0) {
-        ap %>%
-            select(.linha, CPF, ref = inicio, saida) %>%
-            mutate(ref = coalesce(saida, ref)) %>%
-            inner_join(outras %>% select(CPF, ret_inicio = inicio, ret_sit = situacao),
-                       by = "CPF", relationship = "many-to-many") %>%
-            filter(ret_inicio > ref) %>%
-            group_by(.linha) %>%
-            slice_min(ret_inicio, n = 1, with_ties = FALSE) %>%
-            ungroup() %>%
-            select(.linha, ret_inicio, ret_sit)
+    r2 <- if (is.null(coluna_serventia(base, REGEX_COL_CEP))) {
+        NULL
     } else {
-        tibble(.linha = integer(0), ret_inicio = as.Date(character(0)), ret_sit = character(0))
+        d %>%
+            filter(ativa) %>%
+            mutate(
+                digitos = str_remove_all(coalesce(cep, ""), "\\D"),
+                ausente = is.na(cep) | str_trim(cep) == "",
+                invalido = !ausente & (nchar(digitos) != 8 | str_detect(digitos, "^(\\d)\\1{7}$"))
+            ) %>%
+            filter(ausente | invalido) %>%
+            mutate(
+                Gravidade = ifelse(invalido, "Alta", "Média"),
+                Motivo = ifelse(
+                    ausente,
+                    "Serventia ativa sem CEP informado.",
+                    sprintf("Serventia ativa com CEP \"%s\" inválido (precisa ter 8 dígitos e não ser uma sequência repetida).", cep)
+                )
+            ) %>%
+            arrange(nome)
     }
     
-    r2 <- ap %>%
-        left_join(retorno, by = ".linha") %>%
+    # ---- 3) Nome repetido entre serventias ativas ----
+    
+    r3 <- d %>%
+        filter(ativa, !is.na(chave_nome) & chave_nome != "") %>%
+        group_by(chave_nome) %>%
+        filter(n_distinct(codigo) > 1) %>%
         mutate(
-            dias = as.integer(saida - inicio),
-            tem_saida = !is.na(saida),
-            voltou = !is.na(ret_inicio),
-            curta = tem_saida & !is.na(dias) & dias <= LIMITE_DIAS_APOSENTADORIA_CURTA
-        ) %>%
-        filter(tem_saida | voltou) %>%
-        mutate(
-            Gravidade = ifelse(voltou | curta, "Alta", "Média"),
-            Motivo = paste0(
-                "Aposentadoria (situação 10) é definitiva, mas ",
-                ifelse(
-                    tem_saida,
-                    paste0(
-                        "tem data de saída",
-                        ifelse(is.na(dias), "", paste0(" (duração de ", dias, " dia(s))"))
-                    ),
-                    ""
-                ),
-                ifelse(tem_saida & voltou, " e ", ""),
-                ifelse(
-                    voltou,
-                    paste0(
-                        "o magistrado volta em ", mag_fmt_data(ret_inicio), " como ",
-                        coalesce(unname(rotulo_sit[ret_sit]), paste("situação", ret_sit))
-                    ),
-                    ""
-                ),
-                ifelse(voltou | curta, ". Perfil de afastamento temporário - provável situação 9 (Afastado(a)).", ".")
+            Gravidade = "Média",
+            Motivo = sprintf(
+                "Mesmo nome de outra(s) serventia(s) ativa(s) — códigos %s.",
+                paste(sort(unique(codigo)), collapse = ", ")
             )
         ) %>%
-        arrange(Nome, inicio)
+        ungroup() %>%
+        arrange(chave_nome, codigo)
+    
+    # ---- 4) Serventia inativa com lotação ativa ----
+    
+    r4 <- NULL
+    
+    if (tem_status && !is.null(lotacoes) && nrow(lotacoes) > 0) {
+        
+        # Só chaves sem nenhuma serventia ativa (um nome repetido entre
+        # uma ativa e uma inativa não é apontado).
+        indice <- indice_serventias(base)
+        chaves_inativas <- indice$chave[!indice$alguma_ativa]
+        
+        chaves_serv <- bind_rows(
+            d %>% filter(!ativa, !is.na(codigo) & codigo != "") %>%
+                transmute(.linha, chave = paste0("cod:", codigo)),
+            d %>% filter(!ativa, !is.na(chave_nome) & chave_nome != "") %>%
+                transmute(.linha, chave = paste0("nome:", chave_nome))
+        ) %>%
+            filter(chave %in% chaves_inativas) %>%
+            distinct()
+        
+        lotados <- chaves_serv %>%
+            inner_join(lotacoes, by = "chave", relationship = "many-to-many") %>%
+            distinct(.linha, tipo, CPF, Nome) %>%
+            group_by(.linha) %>%
+            summarise(
+                n_mag = n_distinct(CPF[tipo == "magistrado"]),
+                n_serv = n_distinct(CPF[tipo == "servidor"]),
+                nomes_mag = listar_nomes_motivo(Nome[tipo == "magistrado"]),
+                nomes_serv = listar_nomes_motivo(Nome[tipo == "servidor"]),
+                .groups = "drop"
+            )
+        
+        r4 <- d %>%
+            inner_join(lotados, by = ".linha") %>%
+            mutate(
+                Gravidade = "Alta",
+                Motivo = paste0(
+                    "Status \"", coalesce(status, "não informado"), "\" na base, mas ainda é a lotação atual de ",
+                    ifelse(n_mag > 0, sprintf("%d magistrado(s) (%s)", n_mag, nomes_mag), ""),
+                    ifelse(n_mag > 0 & n_serv > 0, " e de ", ""),
+                    ifelse(n_serv > 0, sprintf("%d servidor(es) (%s)", n_serv, nomes_serv), ""),
+                    ". Conferir o status da serventia ou a lotação."
+                )
+            ) %>%
+            arrange(nome)
+    }
     
     bind_rows(
-        if (nrow(r1) > 0) montar(r1, VERIFICACAO_MAG_CARGO) else vazio,
-        if (nrow(r2) > 0) montar(r2, VERIFICACAO_MAG_APOSENTADORIA) else vazio
+        montar(r1, VERIFICACAO_SRV_CODIGO),
+        montar(r2, VERIFICACAO_SRV_CEP),
+        montar(r3, VERIFICACAO_SRV_NOME),
+        montar(r4, VERIFICACAO_SRV_LOTACAO)
     )
     
 }
 
 # =====================================================
-# LOTAÇÕES ATUAIS (usadas pelo módulo Serventias)
+# UI
+# =====================================================
+
+# Conteúdo "Gerar arquivo CSV" — ui_csv_dados() de mod_pessoal_auxiliar.R.
+ui_csv_serventias <- ui_csv_dados
+
+# =====================================================
+# NOVO ENVIO — SERVENTIAS COM ALERTA
 # -----------------------------------------------------
-# Último registro de cada CPF, em situação não encerrada (aposentadoria,
-# saída por remoção, falecimento, exoneração/vacância, saída). Alimenta a
-# verificação "Serventia inativa com lotação ativa" de
-# mod_alertas_serventias.R.
+# O arquivo de Serventias não tem CPF nem datas de situação, então a
+# regra de Pessoal e Auxiliar (encerrar o registro anterior e incluir o
+# novo) não se aplica. Aqui o "Gerar Novo Envio" gera um CSV só com as
+# linhas do arquivo de ENVIO cujo Código Serventia aparece no arquivo de
+# ALERTAS com algum alerta/conflito preenchido — exatamente como estão
+# no envio (mesmas colunas e ordem; datas seriais do Excel em
+# dd/mm/aaaa), para reenviar ao MPM depois de corrigidas.
+#
+# Devolve list(dados, codigos_alerta, sem_envio): códigos com alerta e,
+# entre eles, os que não estão no arquivo de envio.
 # =====================================================
 
-SITUACOES_MAG_ENCERRADAS <- c("10", "12", "13", "14", "20")
-
-carregar_lotacoes_magistrados_empresa <- function(empresa) {
-    tryCatch(
-        lotacoes_ativas_pessoas(
-            carregar_arquivo_magistrados(mag_arquivo_do_tipo(pasta_magistrados(empresa), "base")),
-            REGEX_COL_ORGAO_MAGISTRADO,
-            SITUACOES_MAG_ENCERRADAS
-        ),
-        error = function(e) lotacoes_ativas_pessoas(NULL, REGEX_COL_ORGAO_MAGISTRADO, character(0))
-    )
-}
-
-# =====================================================
-# NOVO ENVIO — CARGOS DISTINTOS ATIVOS / DUPLICIDADE (Magistrados)
-# -----------------------------------------------------
-# Adaptação da regra de Pessoal e Auxiliar (gerar_novo_envio_duplicidade(),
-# em mod_alertas.R). No arquivo de alertas de Magistrados do MPM a
-# duplicidade aparece como "Alerta: Inconsistência" = "Há cargos
-# distintos ativos para o mesmo CPF informado" (ex.: promoção de
-# Juiz(a) Substituto(a) para Titular sem encerrar o registro anterior);
-# "Conflito: Duplicidade no próprio Tribunal", se vier, também conta.
-#
-# Para cada CPF com esse alerta, gera DUAS linhas, nesta ordem:
-#
-#   1) o registro da BASE DE DADOS que continua em aberto — sem Data de
-#      saída, com situação não encerrada (fora de 10, 12, 13, 14 e 20 —
-#      SITUACOES_MAG_ENCERRADAS), cargo DIFERENTE do cargo do envio e
-#      Data de início anterior à do envio (o mais recente, se houver
-#      mais de um) —, igual ao da base, só com a inclusão da "Data de
-#      saída da situação" = "Data de início da situação" do ENVIO;
-#   2) o registro do ENVIO, exatamente como está no arquivo de envio
-#      (o mais recente do CPF, se houver mais de um).
-#
-# As colunas são as do arquivo de envio, na mesma ordem; colunas do
-# envio que a base não tem ficam vazias (ex.: a base do MPM tem
-# "Status", o envio não). Valores como nos arquivos (códigos, não os
-# textos da tela); datas seriais do Excel saem em dd/mm/aaaa.
-#
-# Devolve list(dados, cpfs_conflito, sem_envio, sem_base, fora_situacao)
-# — fora_situacao fica sempre vazio aqui (a situação já é critério de
-# escolha do registro da base); sem_base lista os CPFs sem registro em
-# aberto, de outro cargo, anterior ao envio.
-# =====================================================
-
-# Texto do alerta (normalizado: minúsculo, sem acento) que indica a
-# duplicidade de magistrados.
-REGEX_TEXTO_DUPLICIDADE_MAG <- "cargos? distintos? ativos?|duplicidade"
-
-cpfs_com_duplicidade_magistrados <- function(alertas) {
+gerar_novo_envio_serventias <- function(envio, alertas) {
     
-    if (is.null(alertas) || nrow(alertas) == 0) {
-        return(character(0))
+    colunas <- if (is.null(envio)) character(0) else names(envio)
+    vazio <- list(dados = novo_envio_vazio(colunas)$dados, codigos_alerta = character(0), sem_envio = character(0))
+    
+    if (is.null(envio) || ncol(envio) == 0 || is.null(alertas) || nrow(alertas) == 0) {
+        return(vazio)
     }
     
-    col_cpf <- coluna_por_regex(alertas, REGEX_COL_CPF)
+    col_cod_alertas <- coluna_serventia(alertas, REGEX_COL_CODIGO_SERVENTIA)
+    cols_alerta <- c(colunas_por_prefixo(alertas, "Alerta"), colunas_por_prefixo(alertas, "Conflito"))
     
-    if (is.null(col_cpf)) {
-        return(character(0))
+    if (is.null(col_cod_alertas) || length(cols_alerta) == 0) {
+        return(vazio)
     }
     
-    nomes <- normalizar_nome_coluna(names(alertas))
-    
-    # 1) Coluna de conflito de duplicidade (qualquer conteúdo).
-    cols_conflito <- names(alertas)[str_detect(nomes, REGEX_CONFLITO_DUPLICIDADE_TRIBUNAL)]
-    
-    # 2) Qualquer coluna Alerta/Conflito cujo TEXTO fale em cargos
-    #    distintos ativos ou duplicidade.
-    cols_texto <- names(alertas)[str_detect(nomes, "^(alerta|conflito)")]
-    
-    marcado <- rep(FALSE, nrow(alertas))
-    
-    for (c in cols_conflito) {
+    tem_alerta <- Reduce(`|`, lapply(cols_alerta, function(c) {
         v <- alertas[[c]]
-        marcado <- marcado | (!is.na(v) & str_trim(v) != "")
-    }
+        !is.na(v) & str_trim(v) != ""
+    }))
     
-    for (c in cols_texto) {
-        v <- normalizar_texto_busca(coalesce(as.character(alertas[[c]]), ""))
-        marcado <- marcado | str_detect(v, REGEX_TEXTO_DUPLICIDADE_MAG)
-    }
+    codigos <- unique(codigo_limpo(alertas[[col_cod_alertas]][tem_alerta]))
+    codigos <- codigos[!is.na(codigos) & codigos != ""]
     
-    cpfs <- unique(chave_cpf(alertas[[col_cpf]][marcado]))
-    cpfs[cpfs != ""]
-    
-}
-
-gerar_novo_envio_magistrados <- function(envio, base, alertas) {
-    
-    if (is.null(envio) || ncol(envio) == 0) {
-        return(novo_envio_vazio())
-    }
-    
-    colunas <- names(envio)
-    vazio <- novo_envio_vazio(colunas)
-    
-    if (nrow(envio) == 0) {
+    if (length(codigos) == 0) {
         return(vazio)
     }
     
-    cpfs <- cpfs_com_duplicidade_magistrados(alertas)
+    vazio$codigos_alerta <- codigos
     
-    if (length(cpfs) == 0) {
+    col_cod_envio <- coluna_serventia(envio, REGEX_COL_CODIGO_SERVENTIA)
+    
+    if (is.null(col_cod_envio) || nrow(envio) == 0) {
+        vazio$sem_envio <- codigos
         return(vazio)
     }
     
-    vazio$cpfs_conflito <- cpfs
+    cod_envio <- codigo_limpo(envio[[col_cod_envio]])
     
-    col_cpf_envio <- coluna_por_regex(envio, REGEX_COL_CPF)
-    col_inicio_envio <- coluna_por_regex(envio, REGEX_COL_INICIO_SITUACAO)
-    col_saida_envio <- coluna_por_regex(envio, REGEX_COL_SAIDA_SITUACAO)
-    col_cargo_envio <- coluna_por_regex(envio, REGEX_COL_CARGO)
-    
-    if (is.null(col_cpf_envio) || is.null(col_inicio_envio)) {
-        vazio$sem_envio <- cpfs
-        return(vazio)
-    }
-    
-    base <- remover_registros_excluidos(base)
-    tem_base <- !is.null(base) && nrow(base) > 0
-    col_cpf_base <- if (tem_base) coluna_por_regex(base, REGEX_COL_CPF)
-    tem_base <- tem_base && !is.null(col_cpf_base)
-    col_inicio_base <- if (tem_base) coluna_por_regex(base, REGEX_COL_INICIO_SITUACAO)
-    col_saida_base <- if (tem_base) coluna_por_regex(base, REGEX_COL_SAIDA_SITUACAO)
-    col_situacao_base <- if (tem_base) coluna_por_regex(base, REGEX_COL_SITUACAO)
-    col_cargo_base <- if (tem_base) coluna_por_regex(base, REGEX_COL_CARGO)
-    
-    correspondencia <- if (tem_base) {
-        names(base)[match(normalizar_nome_coluna(colunas), normalizar_nome_coluna(names(base)))]
-    } else {
-        rep(NA_character_, length(colunas))
-    }
-    
-    n_base <- if (tem_base) nrow(base) else 0
-    valor_base <- function(col) if (is.null(col)) rep(NA_character_, n_base) else as.character(base[[col]])
-    
-    chave_envio <- chave_cpf(envio[[col_cpf_envio]])
-    inicio_envio <- converter_data(envio[[col_inicio_envio]])
-    cargo_envio <- if (is.null(col_cargo_envio)) rep(NA_character_, nrow(envio)) else codigo_limpo(envio[[col_cargo_envio]])
-    
-    chave_base <- if (tem_base) chave_cpf(base[[col_cpf_base]]) else character(0)
-    inicio_base <- converter_data(valor_base(col_inicio_base))
-    saida_base <- str_trim(coalesce(valor_base(col_saida_base), ""))
-    situacao_base <- codigo_limpo(valor_base(col_situacao_base))
-    cargo_base <- codigo_limpo(valor_base(col_cargo_base))
-    
-    como_texto <- function(v) {
-        v <- as.character(v)
-        v[is.na(v)] <- ""
-        v
-    }
-    
-    linhas <- list()
-    sem_envio <- character(0)
-    sem_base <- character(0)
-    
-    for (cpf in cpfs) {
-        
-        i_env <- which(chave_envio == cpf)
-        
-        if (length(i_env) == 0) {
-            sem_envio <- c(sem_envio, cpf)
-            next
-        }
-        
-        # Envio mais recente do CPF (empate: o último no arquivo).
-        ordem <- order(!is.na(inicio_envio[i_env]), inicio_envio[i_env], i_env)
-        i_env <- i_env[ordem][length(ordem)]
-        data_ini_env <- inicio_envio[i_env]
-        
-        # Registro da base ainda em aberto, de outro cargo, anterior ao
-        # envio.
-        i_base <- which(chave_base == cpf)
-        
-        if (length(i_base) > 0 && !is.na(data_ini_env)) {
-            i_base <- i_base[
-                !is.na(inicio_base[i_base]) & inicio_base[i_base] < data_ini_env &
-                    saida_base[i_base] == "" &
-                    !(situacao_base[i_base] %in% SITUACOES_MAG_ENCERRADAS) &
-                    (is.na(cargo_envio[i_env]) | is.na(cargo_base[i_base]) | cargo_base[i_base] != cargo_envio[i_env])
-            ]
-        } else {
-            i_base <- integer(0)
-        }
-        
-        if (length(i_base) == 0) {
-            sem_base <- c(sem_base, cpf)
-            next
-        }
-        
-        i_base <- i_base[order(inicio_base[i_base], i_base)][length(i_base)]
-        
-        reg_env <- vapply(colunas, function(c) como_texto(envio[[c]][i_env]), character(1))
-        
-        reg_base <- vapply(seq_along(colunas), function(k) {
-            c <- correspondencia[k]
-            if (is.na(c)) "" else como_texto(base[[c]][i_base])
-        }, character(1))
-        names(reg_base) <- colunas
-        
-        if (!is.null(col_saida_envio)) {
-            reg_base[[col_saida_envio]] <- reg_env[[col_inicio_envio]]
-        }
-        
-        linhas[[length(linhas) + 1]] <- reg_base
-        linhas[[length(linhas) + 1]] <- reg_env
-    }
-    
-    dados <- if (length(linhas) > 0) {
-        as.data.frame(do.call(rbind, linhas), check.names = FALSE, stringsAsFactors = FALSE)
-    } else {
-        vazio$dados
-    }
+    dados <- envio[cod_envio %in% codigos, , drop = FALSE]
+    dados <- as.data.frame(lapply(dados, function(v) { v <- as.character(v); v[is.na(v)] <- ""; v }),
+                           check.names = FALSE, stringsAsFactors = FALSE)
     names(dados) <- colunas
     rownames(dados) <- NULL
     
@@ -857,22 +662,21 @@ gerar_novo_envio_magistrados <- function(envio, base, alertas) {
         dados[[c]] <- data_formato_envio(dados[[c]])
     }
     
-    list(dados = dados, cpfs_conflito = cpfs, sem_envio = sem_envio, sem_base = sem_base,
-         fora_situacao = character(0))
+    list(dados = dados, codigos_alerta = codigos, sem_envio = setdiff(codigos, cod_envio))
     
 }
 
 # =====================================================
-# ABA DE CADASTRO (Base de Dados / Envio - Magistrados)
+# ABA DE CADASTRO (Base de Dados / Envio - Serventias)
 # -----------------------------------------------------
-# Mesma estrutura de Pessoal e Auxiliar (ui_aba_cadastro_pessoal(), em
-# mod_alertas.R): as duas abas têm os mesmos filtros (Status, CPF, Nome,
-# Cargo, Situação, Órgão de lotação e Detalhe), gráfico e CSV. `p` é o
-# prefixo dos ids ("base" ou "envio": base_status, envio_status...). O
-# lado do servidor é servidor_aba_cadastro_magistrados().
+# Mesma estrutura de Pessoal e Auxiliar: as abas Base de Dados e Envio
+# têm os mesmos filtros (Status, Código Serventia, Código da Unidade de
+# Origem, Entrância e Detalhe), gráfico por CEP e CSV. `p` é o prefixo
+# dos ids ("base" ou "envio"). O lado do servidor é
+# servidor_aba_cadastro_serventias().
 # =====================================================
 
-ui_aba_cadastro_magistrados <- function(ns, p, titulo, icone) {
+ui_aba_cadastro_serventias <- function(ns, p, titulo, icone) {
     
     id <- function(x) ns(paste0(p, "_", x))
     
@@ -896,9 +700,9 @@ ui_aba_cadastro_magistrados <- function(ns, p, titulo, icone) {
             
             fluidRow(
                 column(
-                    2,
-                    # Começa em "Ativo"; se o arquivo não tiver coluna
-                    # Status, volta para "Todos".
+                    3,
+                    # Começa em "Ativo"; as demais opções chegam quando o
+                    # arquivo é carregado.
                     selectInput(
                         id("status"), "Status",
                         choices = c("Todos", "Ativo"),
@@ -906,17 +710,15 @@ ui_aba_cadastro_magistrados <- function(ns, p, titulo, icone) {
                         width = "100%"
                     )
                 ),
-                column(3, textInput(id("cpf"), "CPF", width = "100%")),
-                column(7, textInput(id("nome"), "Nome", width = "100%"))
-            ),
-            
-            fluidRow(
-                column(4, selectInput(id("cargo"), "Cargo", choices = c("Todos"), width = "100%")),
+                column(3, textInput(id("codigo"), "Código Serventia", width = "100%")),
                 column(
-                    4,
-                    selectInput(id("situacao"), "Situação profissional atual", choices = c("Todos"), width = "100%")
+                    3,
+                    selectInput(id("unidade"), "Código da Unidade de Origem", choices = c("Todos"), width = "100%")
                 ),
-                column(4, selectInput(id("orgao"), "Órgão de lotação", choices = c("Todos"), width = "100%"))
+                column(
+                    3,
+                    selectInput(id("entrancia"), "Entrância", choices = c("Todos"), width = "100%")
+                )
             ),
             
             fluidRow(
@@ -953,34 +755,24 @@ ui_aba_cadastro_magistrados <- function(ns, p, titulo, icone) {
                 tabPanel(
                     tagList(icon("chart-column", class = "me-1"), "Gráfico"),
                     
-                    fluidRow(
+                    div(
                         class = "mt-3",
+                        style = "max-width: 320px;",
                         id = id("grafico_controles"),
-                        column(
-                            4,
-                            selectInput(
-                                id("grafico_agrupar"), "Agrupar por",
-                                choices = names(AGRUPAMENTOS_BASE_MAGISTRADOS),
-                                selected = "Cargo",
-                                width = "100%"
-                            )
-                        ),
-                        column(
-                            4,
-                            selectInput(
-                                id("grafico_qtd"), "Exibir",
-                                choices = c(
-                                    "Os 20 maiores grupos" = "20",
-                                    "Os 50 maiores grupos" = "50",
-                                    "Todos os grupos" = "0"
-                                ),
-                                selected = "20",
-                                width = "100%"
-                            )
+                        selectInput(
+                            id("grafico_qtd"),
+                            "Exibir",
+                            choices = c(
+                                "Os 20 CEPs com mais serventias" = "20",
+                                "Os 50 CEPs com mais serventias" = "50",
+                                "Todos os CEPs" = "0"
+                            ),
+                            selected = "20",
+                            width = "100%"
                         )
                     ),
                     
-                    girafeOutput(id("grafico"))
+                    girafeOutput(id("grafico_cep"))
                 ),
                 tabPanel(
                     tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
@@ -992,32 +784,18 @@ ui_aba_cadastro_magistrados <- function(ns, p, titulo, icone) {
     
 }
 
-# Chamado dentro de mod_alertas_magistrados_server(). `dados` é o
-# reactiveVal com o arquivo lido; `p`, o prefixo dos ids da UI. Devolve a
-# versão de exibição, a filtrada, a função que atualiza os combos e a
-# mensagem de "sem arquivo" (usada na janela de aviso).
-servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
-                                              msg_sem_dados, nome_csv,
-                                              mapa_orgaos = reactive(character(0)),
-                                              extra_csv = NULL) {
+# Chamado dentro de mod_serventias_server(). `dados` é o
+# reactiveVal com o arquivo lido; `p`, o prefixo dos ids da UI. Devolve
+# os dados filtrados, a função que atualiza os combos e a mensagem de
+# "sem arquivo" (usada na janela de aviso).
+servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
+                                             msg_sem_dados, nome_csv, extra_csv = NULL) {
     
     ns <- session$ns
     id <- function(x) paste0(p, "_", x)
     valor <- function(x) input[[id(x)]]
     
-    MSG_SEM_RESULTADO <- "Nenhum magistrado encontrado com os filtros aplicados."
-    
-    # Mesmas colunas e ordem do arquivo; Cargo e Situação por extenso e
-    # o Órgão como "código - nome da serventia" (se a base de Serventias
-    # tiver sido enviada), como em Pessoal e Auxiliar.
-    exibicao <- reactive({
-        df <- traduzir_codigos_magistrados(dados())
-        col_orgao <- coluna_por_regex(df, REGEX_COL_ORGAO_MAGISTRADO)
-        if (nrow(df) > 0 && !is.null(col_orgao)) {
-            df[[col_orgao]] <- rotular_orgaos(df[[col_orgao]], mapa_orgaos())
-        }
-        df
-    })
+    MSG_SEM_RESULTADO <- "Nenhuma serventia encontrada com os filtros aplicados."
     
     # Quando o arquivo passa de "sem dados" para "com dados" (primeiro
     # envio, troca de empresa), o Status volta ao padrão "Ativo".
@@ -1025,50 +803,48 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
     
     atualizar_combos <- function() {
         
-        df <- exibicao()
+        df <- dados()
         
-        status <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_STATUS_MAGISTRADO))
-        cargos <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_CARGO))
-        situacoes <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_SITUACAO))
-        orgaos <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_ORGAO_MAGISTRADO))
+        status <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_STATUS))
+        unidades <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_UNIDADE_ORIGEM))
+        entrancias <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_ENTRANCIA))
         
         status_atual <- if (length(status_anterior) == 0) "Ativo" else valor("status")
         status_anterior <<- status
         
         updateSelectInput(session, id("status"), choices = c("Todos", status),
                           selected = selecao_valida(status_atual, status, padrao = "Ativo"))
-        updateSelectInput(session, id("cargo"), choices = c("Todos", cargos),
-                          selected = selecao_valida(valor("cargo"), cargos))
-        updateSelectInput(session, id("situacao"), choices = c("Todos", situacoes),
-                          selected = selecao_valida(valor("situacao"), situacoes))
-        updateSelectInput(session, id("orgao"), choices = c("Todos", orgaos),
-                          selected = selecao_valida(valor("orgao"), orgaos))
+        updateSelectInput(session, id("unidade"), choices = c("Todos", unidades),
+                          selected = selecao_valida(valor("unidade"), unidades))
+        updateSelectInput(session, id("entrancia"), choices = c("Todos", entrancias),
+                          selected = selecao_valida(valor("entrancia"), entrancias))
         
     }
     
     # Status volta ao padrão "Ativo" (não para "Todos").
     observeEvent(valor("limpar_filtros"), {
-        status <- opcoes_combo(valores_coluna_regex(exibicao(), REGEX_COL_STATUS_MAGISTRADO))
+        status <- opcoes_combo(valores_coluna_exibicao(dados(), REGEX_COL_STATUS))
         updateSelectInput(session, id("status"), selected = selecao_valida("Ativo", status))
-        updateTextInput(session, id("cpf"), value = "")
-        updateTextInput(session, id("nome"), value = "")
-        updateSelectInput(session, id("cargo"), selected = "Todos")
-        updateSelectInput(session, id("situacao"), selected = "Todos")
-        updateSelectInput(session, id("orgao"), selected = "Todos")
+        updateTextInput(session, id("codigo"), value = "")
+        updateSelectInput(session, id("unidade"), selected = "Todos")
+        updateSelectInput(session, id("entrancia"), selected = "Todos")
         updateTextInput(session, id("detalhe"), value = "")
     }, ignoreInit = TRUE)
     
+    # Texto de busca por linha (filtro Detalhe) — recalculado só quando o
+    # arquivo muda, não a cada tecla digitada.
     busca <- reactive({
-        texto_busca_linhas(exibicao())
+        texto_busca_linhas(dados())
     })
     
     # Espera o usuário parar de digitar (400 ms) antes de filtrar.
-    cpf_d <- debounce(reactive(valor("cpf")), 400)
-    nome_d <- debounce(reactive(valor("nome")), 400)
     detalhe_d <- debounce(reactive(valor("detalhe")), 400)
+    codigo_d <- debounce(reactive(valor("codigo")), 400)
     
+    # Filtros combinados como máscaras; a tabela mantém TODAS as colunas
+    # do arquivo, na ordem original.
     filtrados <- reactive({
-        df <- exibicao()
+        df <- dados()
         
         if (nrow(df) == 0) {
             return(df)
@@ -1078,28 +854,26 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         
         filtrar_combo <- function(sel, regex) {
             if (!is.null(sel) && sel != "Todos") {
-                v <- valores_coluna_regex(df, regex)
+                v <- valores_coluna_exibicao(df, regex)
                 if (!is.null(v)) manter <<- manter & v == sel
             }
         }
         
-        filtrar_combo(valor("status"), REGEX_COL_STATUS_MAGISTRADO)
-        filtrar_combo(valor("cargo"), REGEX_COL_CARGO)
-        filtrar_combo(valor("situacao"), REGEX_COL_SITUACAO)
-        filtrar_combo(valor("orgao"), REGEX_COL_ORGAO_MAGISTRADO)
+        filtrar_combo(valor("status"), REGEX_COL_STATUS)
+        filtrar_combo(valor("unidade"), REGEX_COL_UNIDADE_ORIGEM)
+        filtrar_combo(valor("entrancia"), REGEX_COL_ENTRANCIA)
         
-        cpf <- str_trim(cpf_d() %||% "")
-        col_cpf <- coluna_por_regex(df, REGEX_COL_CPF)
-        if (cpf != "" && !is.null(col_cpf)) {
-            manter <- manter & contem_cpf(df[[col_cpf]], cpf)
+        codigo <- str_trim(codigo_d() %||% "")
+        col_codigo <- coluna_serventia(df, REGEX_COL_CODIGO_SERVENTIA)
+        if (codigo != "" && !is.null(col_codigo)) {
+            manter <- manter & str_detect(
+                str_to_upper(coalesce(df[[col_codigo]], "")),
+                fixed(str_to_upper(codigo))
+            )
         }
         
-        nome <- str_trim(nome_d() %||% "")
-        col_nome <- coluna_por_regex(df, REGEX_COL_NOME)
-        if (nome != "" && !is.null(col_nome)) {
-            manter <- manter & contem_texto(df[[col_nome]], nome)
-        }
-        
+        # Detalhe: o texto digitado em QUALQUER coluna (sem diferenciar
+        # maiúsculas/minúsculas nem acentos).
         detalhe <- str_trim(detalhe_d() %||% "")
         if (detalhe != "") {
             manter <- manter & str_detect(busca(), fixed(normalizar_texto_busca(detalhe)))
@@ -1120,9 +894,9 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         tabela_dt(df)
     })
     
-    # ---- Gráfico (agrupamento selecionável) ----
+    # ---- Gráfico por CEP (ggiraph) ----
     
-    resumo <- reactive({
+    resumo_cep <- reactive({
         if (nrow(dados()) == 0) {
             return(list(resumo = NULL, mensagem = FALSE))
         }
@@ -1133,56 +907,73 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
             return(list(resumo = NULL, mensagem = MSG_SEM_RESULTADO))
         }
         
-        agrupar <- valor("grafico_agrupar") %||% "Cargo"
-        regex <- AGRUPAMENTOS_BASE_MAGISTRADOS[[agrupar]]
-        grupos <- valores_coluna_regex(df, regex)
+        col_cep <- coluna_serventia(df, REGEX_COL_CEP)
         
-        if (is.null(grupos)) {
-            return(list(
-                resumo = NULL,
-                mensagem = sprintf("Coluna \"%s\" não encontrada no arquivo carregado.", agrupar)
-            ))
+        if (is.null(col_cep)) {
+            return(list(resumo = NULL, mensagem = "Coluna \"CEP\" não encontrada no arquivo carregado."))
         }
         
-        col_cpf <- coluna_por_regex(df, REGEX_COL_CPF)
-        cpfs <- if (is.null(col_cpf)) rep(NA_character_, nrow(df)) else df[[col_cpf]]
+        col_nome <- coluna_serventia(df, REGEX_COL_NOME_SERVENTIA)
         
-        r <- tibble(Grupo = grupos, CPF = cpfs) %>%
-            group_by(Grupo) %>%
+        resumo <- tibble(
+            CEP = formatar_cep(df[[col_cep]]),
+            Nome = if (is.null(col_nome)) NA_character_ else df[[col_nome]]
+        ) %>%
+            group_by(CEP) %>%
             summarise(
                 Quantidade = n(),
-                Pessoas = n_distinct(CPF[!is.na(CPF) & CPF != ""]),
+                Serventias = resumir_nomes(Nome),
                 .groups = "drop"
             ) %>%
-            arrange(desc(Quantidade), Grupo)
+            arrange(desc(Quantidade), CEP)
         
-        list(resumo = r, mensagem = NULL, agrupar = agrupar)
+        list(resumo = resumo, mensagem = NULL)
     })
     
-    output[[id("grafico")]] <- renderGirafe({
-        r <- resumo()
+    output[[id("grafico_cep")]] <- renderGirafe({
+        r <- resumo_cep()
         
         shiny::validate(need(is.null(r$mensagem), r$mensagem))
         
-        total <- nrow(r$resumo)
+        total_ceps <- nrow(r$resumo)
         limite <- suppressWarnings(as.integer(valor("grafico_qtd")))
         
-        exibido <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
+        resumo <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
         
-        exibido <- exibido %>%
+        resumo <- resumo %>%
+            arrange(Quantidade, desc(CEP)) %>%   # com coord_flip, a maior fica no topo
             mutate(
+                CEP = factor(CEP, levels = unique(CEP)),
                 dica = sprintf(
-                    "<b>%s</b><br/>%s registro(s)<br/>%s magistrado(s) (CPF distintos)",
-                    htmltools::htmlEscape(Grupo),
+                    "<b>CEP %s</b><br/>%s serventia(s)%s",
+                    htmltools::htmlEscape(as.character(CEP)),
                     format(Quantidade, big.mark = ".", decimal.mark = ","),
-                    format(Pessoas, big.mark = ".", decimal.mark = ",")
+                    ifelse(Serventias == "", "", paste0("<hr style='margin:4px 0'/>", Serventias))
                 )
             )
         
-        grafico_barras_girafe(
-            exibido,
-            titulo = sprintf("Quantidade de Registros por %s", r$agrupar),
-            subtitulo = sprintf("Exibindo %d de %d grupo(s)", nrow(exibido), total)
+        p <- ggplot(resumo, aes(x = CEP, y = Quantidade)) +
+            geom_col_interactive(aes(tooltip = dica, data_id = CEP), fill = "#2C7FB8") +
+            geom_text(aes(label = Quantidade), hjust = -0.2, size = 3.2) +
+            coord_flip() +
+            scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+            labs(
+                title = "Quantidade de Serventias por CEP",
+                subtitle = sprintf("Exibindo %d de %d CEP(s)", nrow(resumo), total_ceps),
+                x = "",
+                y = "Quantidade"
+            ) +
+            theme_minimal()
+        
+        girafe(
+            ggobj = p,
+            width_svg = 9,
+            height_svg = max(3, 0.28 * nrow(resumo) + 1.6),
+            options = list(
+                opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
+                opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
+                opts_sizing(rescale = TRUE, width = 1)
+            )
         )
     })
     
@@ -1192,7 +983,7 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
     # botão "Gerar Novo Envio").
     output[[id("csv_ui")]] <- renderUI({
         tagList(
-            ui_csv_dados(ns, id("download_csv"), nrow(filtrados()) > 0),
+            ui_csv_serventias(ns, id("download_csv"), nrow(filtrados()) > 0),
             if (is.function(extra_csv)) extra_csv()
         )
     })
@@ -1216,7 +1007,6 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
     )
     
     list(
-        exibicao = exibicao,
         filtrados = filtrados,
         atualizar_combos = atualizar_combos,
         msg_sem_dados = msg_sem_dados
@@ -1224,18 +1014,16 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
     
 }
 
-# =====================================================
-# UI
-# =====================================================
 
-mod_alertas_magistrados_ui <- function(id) {
+
+mod_serventias_ui <- function(id) {
     
     ns <- NS(id)
     
     tagList(
         
         # ===================================================
-        # ESTILO (escopo deste módulo) — mesmo visual dos demais
+        # ESTILO (escopo deste módulo) — mesmo visual de mod_pessoal_auxiliar.R
         # ===================================================
         
         tags$head(
@@ -1288,6 +1076,7 @@ mod_alertas_magistrados_ui <- function(id) {
           padding: .55rem 1.1rem;
         }
 
+        /* Abas principais (Base de Dados / Alertas) */
         #%1$s .srv-secoes > .nav-tabs {
           margin-bottom: 1.25rem;
         }
@@ -1393,8 +1182,8 @@ mod_alertas_magistrados_ui <- function(id) {
                 
                 div(
                     class = "al-titulo",
-                    div(class = "al-titulo-icone", icon("gavel")),
-                    tags$h4("Magistrados")
+                    div(class = "al-titulo-icone", icon("building-columns")),
+                    tags$h4("Serventias")
                 ),
                 
                 div(
@@ -1426,17 +1215,18 @@ mod_alertas_magistrados_ui <- function(id) {
                     # -------------------------------------------------
                     # Mesma estrutura de Pessoal e Auxiliar: as duas abas
                     # têm os mesmos filtros, gráfico e CSV (ver
-                    # ui_aba_cadastro_magistrados()).
+                    # ui_aba_cadastro_serventias()).
                     # =============================================
                     
-                    ui_aba_cadastro_magistrados(ns, "base", titulo = "Base de Dados", icone = "database"),
+                    ui_aba_cadastro_serventias(ns, "base", titulo = "Base de Dados", icone = "database"),
                     
-                    ui_aba_cadastro_magistrados(ns, "envio", titulo = "Envio", icone = "paper-plane"),
+                    ui_aba_cadastro_serventias(ns, "envio", titulo = "Envio", icone = "paper-plane"),
                     
                     # =============================================
-                    # ABA 3 — ALERTAS - MAGISTRADOS
+                    # ABA 3 — ALERTAS - SERVENTIAS
                     # -------------------------------------------------
-                    # "Alerta" e "Conflito" se excluem mutuamente.
+                    # "Alerta" e "Conflito" se excluem mutuamente, como
+                    # em mod_pessoal_auxiliar.R.
                     # =============================================
                     
                     tabPanel(
@@ -1459,12 +1249,12 @@ mod_alertas_magistrados_ui <- function(id) {
                             fluidRow(
                                 column(4, selectInput(ns("alerta"), "Alerta", choices = c("Todos"), width = "100%")),
                                 column(4, selectInput(ns("conflito"), "Conflito", choices = c("Todos"), width = "100%")),
-                                column(4, selectInput(ns("cargo"), "Cargo", choices = c("Todos"), width = "100%"))
+                                column(4, selectInput(ns("status"), "Status", choices = c("Todos"), width = "100%"))
                             ),
                             
                             fluidRow(
-                                column(4, textInput(ns("cpf"), "CPF", width = "100%")),
-                                column(8, textInput(ns("nome"), "Nome", width = "100%"))
+                                column(4, textInput(ns("codigo"), "Código Serventia", width = "100%")),
+                                column(8, textInput(ns("nome"), "Nome da Serventia", width = "100%"))
                             ),
                             
                             fluidRow(
@@ -1491,7 +1281,7 @@ mod_alertas_magistrados_ui <- function(id) {
                                     tagList(icon("chart-column", class = "me-1"), "Gráfico"),
                                     uiOutput(ns("grafico_ui")),
                                     tags$hr(class = "my-4"),
-                                    girafeOutput(ns("grafico_cargo"))
+                                    girafeOutput(ns("grafico_status"))
                                 ),
                                 tabPanel(
                                     tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
@@ -1502,10 +1292,11 @@ mod_alertas_magistrados_ui <- function(id) {
                     ),
                     
                     # =============================================
-                    # ABA 4 — INCONSISTÊNCIAS - MAGISTRADOS
+                    # ABA 4 — INCONSISTÊNCIAS - SERVENTIAS
                     # -------------------------------------------------
                     # Verificações automáticas sobre a base (ver
-                    # verificar_inconsistencias_magistrados()).
+                    # verificar_inconsistencias_serventias());
+                    # apresentação pelo submódulo mod_inconsistencias.R.
                     # =============================================
                     
                     tabPanel(
@@ -1518,8 +1309,8 @@ mod_alertas_magistrados_ui <- function(id) {
                         
                         mod_inconsistencias_ui(
                             ns("inc"),
-                            verificacoes = c(VERIFICACAO_MAG_CARGO, VERIFICACAO_MAG_APOSENTADORIA),
-                            filtros_texto = c("CPF" = "CPF", "Nome" = "Nome")
+                            verificacoes = VERIFICACOES_SERVENTIAS,
+                            filtros_texto = FILTROS_TEXTO_INC_SERVENTIAS
                         )
                     )
                 )
@@ -1533,16 +1324,21 @@ mod_alertas_magistrados_ui <- function(id) {
 # SERVER
 # =====================================================
 
-mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NULL)) {
+mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NULL)) {
     moduleServer(id, function(input, output, session) {
         
         ns <- session$ns
         
         # Começam vazios: a empresa só é conhecida depois do login.
-        dados_base <- reactiveVal(data.frame())   # magistrados.xlsx/.csv
-        dados_envio <- reactiveVal(data.frame())  # magistrados_envio.xlsx/.csv
-        nomes_orgaos <- reactiveVal(character(0)) # código -> nome (base de Serventias)
-        dados <- reactiveVal(data.frame())        # alertas_magistrados.csv/.xlsx
+        dados_base <- reactiveVal(data.frame())   # serventias.csv
+        dados_envio <- reactiveVal(data.frame())  # serventias_envio.xlsx/.csv
+        dados <- reactiveVal(data.frame())        # alertas_serventias.csv
+        
+        # Lotações atuais de magistrados/servidores (outros módulos) — só
+        # para a verificação "Serventia inativa com lotação ativa".
+        # Mudanças nesses arquivos entram aqui no "Atualizar Dados" ou na
+        # troca de empresa.
+        lotacoes <- reactiveVal(NULL)
         
         empresa_definida <- function() {
             e <- empresa()
@@ -1550,28 +1346,33 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         }
         
         recarregar <- function() {
-            pasta <- pasta_magistrados(empresa())
-            dados_base(carregar_arquivo_magistrados(mag_arquivo_do_tipo(pasta, "base")))
-            dados_envio(carregar_arquivo_magistrados(mag_arquivo_do_tipo(pasta, "envio")))
-            dados(carregar_arquivo_magistrados(mag_arquivo_do_tipo(pasta, "alertas")))
-            # Nomes dos órgãos (para achar gabinetes de desembargador).
-            # A base de Serventias é de outro módulo: mudanças nela entram
-            # aqui no "Atualizar Dados" ou na troca de empresa.
-            nomes_orgaos(mag_nomes_orgaos(empresa()))
+            pasta <- pasta_serventias(empresa())
+            dados_base(carregar_arquivo_serventias(arquivo_do_tipo(pasta, "base")))
+            dados_envio(carregar_arquivo_serventias(arquivo_do_tipo(pasta, "envio")))
+            dados(carregar_arquivo_serventias(arquivo_do_tipo(pasta, "alertas")))
+            lotacoes(carregar_lotacoes_empresa(empresa()))
         }
         
-        # ID novo do fileInput a cada abertura do modal (ver mod_alertas.R).
+        # ----------------------------------------
+        # CONTADOR DO CAMPO DE UPLOAD — ID novo do fileInput a cada
+        # abertura do modal (evita reenviar a seleção de uma abertura
+        # anterior; mesmo motivo de mod_pessoal_auxiliar.R).
+        # ----------------------------------------
         contador_upload <- reactiveVal(0)
         
         id_upload_atual <- function() {
-            paste0("upload_magistrados_", contador_upload())
+            paste0("upload_serventias_", contador_upload())
         }
         
         entrada_upload_atual <- function() {
             input[[id_upload_atual()]]
         }
         
-        # Carga SOB DEMANDA (ver mod_alertas.R): só quando o módulo é
+        # ----------------------------------------
+        # CARREGA DADOS DA EMPRESA ATUAL (login / troca de empresa)
+        # ----------------------------------------
+        
+        # Carga SOB DEMANDA (ver mod_pessoal_auxiliar.R): só quando o módulo é
         # aberto pela primeira vez para a empresa da sessão, em vez de logo
         # no login. Com a empresa vazia (logout), os dados são descartados.
         empresa_carregada <- reactiveVal(NULL)
@@ -1583,7 +1384,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                     dados_base(data.frame())
                     dados_envio(data.frame())
                     dados(data.frame())
-                    nomes_orgaos(character(0))
+                    lotacoes(NULL)
                     empresa_carregada(NULL)
                 }
                 return(invisible(NULL))
@@ -1599,77 +1400,63 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         }, ignoreInit = FALSE)
         
         # =================================================
-        # EXIBIÇÃO (códigos -> nomenclatura)
-        # -------------------------------------------------
-        # Base: mesmas colunas e ordem do arquivo; filtros, Detalhe,
-        # gráfico e CSV usam esta versão.
-        # Alertas: a tradução é aplicada ANTES dos filtros, então o combo
-        # Cargo, o gráfico por Cargo e a tabela mostram a mesma coisa.
+        # COMBOS
         # =================================================
         
         # Abas Base de Dados e Envio (mesmos filtros, gráfico e CSV) — ver
-        # servidor_aba_cadastro_magistrados().
-        aba_base <- servidor_aba_cadastro_magistrados(
+        # servidor_aba_cadastro_serventias().
+        aba_base <- servidor_aba_cadastro_serventias(
             input, output, session, "base",
             dados = dados_base,
             msg_sem_dados = paste0(
-                "Não existe arquivo de Magistrados (magistrados.xlsx ou magistrados.csv)",
+                "Não existe arquivo de Serventias (serventias.xlsx ou serventias.csv)",
                 " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo."
             ),
-            nome_csv = "base-magistrados",
-            mapa_orgaos = nomes_orgaos
+            nome_csv = "base-serventias"
         )
         
-        aba_envio <- servidor_aba_cadastro_magistrados(
+        aba_envio <- servidor_aba_cadastro_serventias(
             input, output, session, "envio",
             dados = dados_envio,
             msg_sem_dados = paste0(
-                "Não existe arquivo de envio de Magistrados (magistrados_envio.xlsx ou .csv)",
+                "Não existe arquivo de envio de Serventias (serventias_envio.xlsx ou .csv)",
                 " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo",
                 " (o nome do arquivo precisa conter \"envio\")."
             ),
-            nome_csv = "envio-magistrados",
-            mapa_orgaos = nomes_orgaos,
+            nome_csv = "envio-serventias",
             extra_csv = function() uiOutput(ns("novo_envio_ui"))
         )
         
         # ---- Envio > Gerar arquivo CSV > "Gerar Novo Envio" ----
-        # Ver gerar_novo_envio_magistrados(). Usa os arquivos como foram
-        # lidos (códigos, sem a tradução da tela) e todos os registros (os
+        # Ver gerar_novo_envio_serventias(): as linhas do envio das
+        # serventias que estão no arquivo de alertas, sem alteração (os
         # filtros da aba não se aplicam).
         novo_envio <- reactive({
-            gerar_novo_envio_magistrados(dados_envio(), dados_base(), dados())
+            gerar_novo_envio_serventias(dados_envio(), dados())
         })
         
         output$novo_envio_ui <- renderUI({
             
             r <- novo_envio()
-            pode_gerar <- nrow(r$dados) > 0
             
             ui_novo_envio(
-                ns, pode_gerar,
+                ns, nrow(r$dados) > 0,
                 descricao = tagList(
-                    "Para cada CPF com o alerta ", tags$b("Há cargos distintos ativos para o mesmo CPF"),
-                    " (ou o conflito ", tags$b("Duplicidade no próprio Tribunal"), ") nos Alertas, gera duas linhas, ",
-                    "com as mesmas colunas do arquivo de envio: o registro da Base de Dados que continua em aberto ",
-                    "(sem Data de saída, situação não encerrada e cargo diferente do envio, com início anterior ao do envio) ",
-                    "apenas com a inclusão da ", tags$b("Data de saída da situação"),
-                    " igual à Data de início da situação do envio, e logo abaixo o registro do envio, sem alteração. ",
-                    "Os valores saem como nos arquivos (códigos, não os textos da tela). Os filtros desta aba não se aplicam."
+                    "Gera um arquivo com as linhas do arquivo de envio das serventias cujo ",
+                    tags$b("Código Serventia"), " aparece no arquivo de ", tags$b("Alertas"),
+                    " com algum alerta ou conflito, exatamente como estão no envio (mesmas colunas e ordem), ",
+                    "para reenviar ao MPM. Os filtros desta aba não se aplicam."
                 ),
-                resumo = if (length(r$cpfs_conflito) == 0) {
-                    "Nenhum CPF com esse alerta no arquivo de alertas."
+                resumo = if (length(r$codigos_alerta) == 0) {
+                    "Nenhuma serventia com alerta no arquivo de alertas."
                 } else {
                     tagList(
-                        sprintf("%d CPF(s) com o alerta; %d no novo envio (%d linhas).",
-                                length(r$cpfs_conflito), nrow(r$dados) / 2, nrow(r$dados)),
+                        sprintf("%d serventia(s) com alerta; %d linha(s) no novo envio.",
+                                length(r$codigos_alerta), nrow(r$dados)),
                         if (length(r$sem_envio) > 0) {
-                            div(class = "text-warning", sprintf("%d CPF(s) não estão no arquivo de envio.", length(r$sem_envio)))
-                        },
-                        if (length(r$sem_base) > 0) {
                             div(class = "text-warning", sprintf(
-                                "%d CPF(s) sem registro em aberto, de outro cargo, na Base de Dados com início anterior ao do envio.",
-                                length(r$sem_base)
+                                "%d serventia(s) com alerta não estão no arquivo de envio: %s.",
+                                length(r$sem_envio), paste(head(r$sem_envio, 10), collapse = ", ")
                             ))
                         }
                     )
@@ -1681,7 +1468,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         output$novo_envio_download <- downloadHandler(
             
             filename = function() {
-                paste0("novo-envio-magistrados-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
+                paste0("novo-envio-serventias-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
             },
             
             content = function(file) {
@@ -1689,24 +1476,15 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                 readr::write_excel_csv2(r$dados, file, na = "")
                 
                 showNotification(
-                    sprintf("Novo envio gerado: %d linha(s) de %d CPF(s).", nrow(r$dados), nrow(r$dados) / 2),
+                    sprintf("Novo envio gerado: %d linha(s).", nrow(r$dados)),
                     type = "message"
                 )
             }
         )
         
-        base_exibicao <- aba_base$exibicao
         dados_base_filtrados <- aba_base$filtrados
-        envio_exibicao <- aba_envio$exibicao
         dados_envio_filtrados <- aba_envio$filtrados
-        
-        alertas_exibicao <- reactive({
-            traduzir_codigos_magistrados(dados())
-        })
-        
-        # =================================================
-        # COMBOS
-        # =================================================
+        MSG_SEM_BASE <- aba_base$msg_sem_dados
         
         atualizar_combos_base <- function() {
             aba_base$atualizar_combos()
@@ -1715,11 +1493,11 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         
         atualizar_combos <- function() {
             
-            df <- alertas_exibicao()
+            df <- dados()
             
             colunas_alerta <- colunas_com_dados(df, colunas_por_prefixo(df, "Alerta"))
             colunas_conflito <- colunas_com_dados(df, colunas_por_prefixo(df, "Conflito"))
-            cargos <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_CARGO))
+            status <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_STATUS))
             
             updateSelectInput(
                 session, "alerta",
@@ -1734,9 +1512,9 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             )
             
             updateSelectInput(
-                session, "cargo",
-                choices = c("Todos", cargos),
-                selected = selecao_valida(input$cargo, cargos)
+                session, "status",
+                choices = c("Todos", status),
+                selected = selecao_valida(input$status, status)
             )
             
         }
@@ -1774,13 +1552,13 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         observeEvent(input$limpar_filtros, {
             updateSelectInput(session, "alerta", selected = "Todos")
             updateSelectInput(session, "conflito", selected = "Todos")
-            updateSelectInput(session, "cargo", selected = "Todos")
-            updateTextInput(session, "cpf", value = "")
+            updateSelectInput(session, "status", selected = "Todos")
+            updateTextInput(session, "codigo", value = "")
             updateTextInput(session, "nome", value = "")
         })
         
         # ----------------------------------------
-        # EXCLUSÃO MÚTUA (Alerta x Conflito)
+        # EXCLUSÃO MÚTUA (Alerta x Conflito) — aba Alertas
         # ----------------------------------------
         
         observeEvent(input$alerta, {
@@ -1799,12 +1577,16 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         
         # =================================================
         # GERENCIAR ARQUIVOS (comum às duas abas)
+        # -------------------------------------------------
+        # Lista os dois arquivos (com botão Apagar para cada um) e permite
+        # enviar um ou os dois de uma vez. O tipo de cada arquivo enviado
+        # é identificado pelas colunas (identificar_tipo_arquivo_serventias).
         # =================================================
         
         linha_arquivo_modal <- function(pasta, tipo, id_apagar) {
             
-            info <- TIPOS_ARQUIVO_MAGISTRADOS[[tipo]]
-            existentes <- mag_arquivos_do_tipo(pasta, tipo)
+            info <- TIPOS_ARQUIVO_SERVENTIAS[[tipo]]
+            existentes <- arquivos_do_tipo(pasta, tipo)
             
             nome_exibido <- if (length(existentes) > 0) {
                 basename(existentes[1])
@@ -1833,6 +1615,8 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                         } else {
                             "ainda não enviado"
                         },
+                        # Se houver .xlsx e .csv do mesmo tipo, avisa qual
+                        # está sendo ignorado (o Apagar remove os dois).
                         if (length(existentes) > 1) {
                             tags$div(
                                 class = "text-warning",
@@ -1863,7 +1647,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                 return(invisible(NULL))
             }
             
-            pasta <- pasta_magistrados(empresa())
+            pasta <- pasta_serventias(empresa())
             
             contador_upload(contador_upload() + 1)
             
@@ -1871,7 +1655,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                 title = div(
                     style = "position:relative; padding-right:28px;",
                     icon("folder-open", class = "me-2"),
-                    sprintf("Gerenciar Arquivos de Magistrados — %s", empresa()),
+                    sprintf("Gerenciar Arquivos de Serventias — %s", empresa()),
                     tags$button(
                         type = "button",
                         class = "btn-close",
@@ -1879,7 +1663,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                         `aria-label` = "Fechar",
                         onclick = sprintf(
                             "Shiny.setInputValue('%s', Math.random(), {priority: 'event'})",
-                            ns("fechar_modal_magistrados")
+                            ns("fechar_modal_serventias")
                         )
                     )
                 ),
@@ -1912,13 +1696,14 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                     
                     div(
                         class = "al-modal-secao-desc",
-                        "Selecione o arquivo de Magistrados, o de envio e/ou o de Alertas de ",
-                        "Magistrados gerados pelo MPM, em ", tags$b(".xlsx"), " ou ", tags$b(".csv"),
+                        "Selecione o arquivo de Serventias, o de envio e/ou o de Alertas de ",
+                        "Serventias gerados pelo MPM, em ", tags$b(".xlsx"), " ou ", tags$b(".csv"),
                         " (um de cada tipo, limite de ", MAX_UPLOAD_MB,
                         " MB no total). O tipo é identificado pelas colunas e pelo nome: com colunas ",
-                        "\"Alerta: ...\" o arquivo é gravado como ", tags$code("alertas_magistrados"),
-                        "; sem alertas e com ", tags$b("envio"), " no nome, como ",
-                        tags$code("magistrados_envio"), "; sem alertas, como ", tags$code("magistrados"),
+                        "\"Alerta: ...\" o arquivo é gravado como ", tags$code("alertas_serventias"),
+                        "; com a coluna CEP, sem alertas e com ", tags$b("envio"), " no nome, como ",
+                        tags$code("serventias_envio"),
+                        "; com a coluna CEP e sem alertas, como ", tags$code("serventias"),
                         " — sempre com a extensão original. Um arquivo já existente do ",
                         "mesmo tipo é substituído."
                     ),
@@ -1951,14 +1736,14 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                     )
                 ),
                 
-                footer = actionButton(ns("fechar_modal_magistrados"), "Fechar")
+                footer = actionButton(ns("fechar_modal_serventias"), "Fechar")
             ))
             
         }
         
         observeEvent(input$gerenciar_arquivos, abrir_gerenciar_arquivos())
         
-        observeEvent(input$fechar_modal_magistrados, {
+        observeEvent(input$fechar_modal_serventias, {
             removeModal()
             session$sendCustomMessage("limpar-modal-backdrop", list())
         })
@@ -2071,8 +1856,9 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         pedir_confirmacao_apagar <- function(tipo) {
             req(empresa())
             
-            info <- TIPOS_ARQUIVO_MAGISTRADOS[[tipo]]
-            existentes <- mag_arquivos_do_tipo(pasta_magistrados(empresa()), tipo)
+            info <- TIPOS_ARQUIVO_SERVENTIAS[[tipo]]
+            
+            existentes <- arquivos_do_tipo(pasta_serventias(empresa()), tipo)
             
             if (length(existentes) == 0) {
                 showNotification(sprintf("Não há arquivo de %s na pasta.", info$rotulo), type = "warning")
@@ -2081,6 +1867,8 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             
             tipo_para_apagar(tipo)
             
+            # Fecha o modal atual antes de abrir a confirmação (evita o
+            # backdrop "grudado" — ver mod_pessoal_auxiliar.R).
             removeModal()
             
             showModal(modalDialog(
@@ -2107,11 +1895,11 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             req(empresa(), tipo_para_apagar())
             
             tipo <- tipo_para_apagar()
-            info <- TIPOS_ARQUIVO_MAGISTRADOS[[tipo]]
+            info <- TIPOS_ARQUIVO_SERVENTIAS[[tipo]]
             tipo_para_apagar(NULL)
             
             inicio <- Sys.time()
-            existentes <- mag_arquivos_do_tipo(pasta_magistrados(empresa()), tipo)
+            existentes <- arquivos_do_tipo(pasta_serventias(empresa()), tipo)
             nomes_existentes <- paste(basename(existentes), collapse = " e ")
             
             if (length(existentes) == 0) {
@@ -2151,12 +1939,13 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         # UPLOAD (um ou dois arquivos; tipo identificado pelas colunas)
         # ----------------------------------------
         
+        # Arquivos já validados, aguardando a confirmação de substituição.
         upload_pendente <- reactiveVal(NULL)
         
         processar_upload <- function(pendente) {
             req(pendente, empresa())
             
-            pasta <- pasta_magistrados(empresa())
+            pasta <- pasta_serventias(empresa())
             req(pasta)
             
             inicio <- Sys.time()
@@ -2168,15 +1957,15 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             
             for (i in seq_len(nrow(pendente))) {
                 
-                info <- TIPOS_ARQUIVO_MAGISTRADOS[[pendente$tipo[i]]]
+                info <- TIPOS_ARQUIVO_SERVENTIAS[[pendente$tipo[i]]]
                 
-                # O anterior do mesmo tipo, em QUALQUER formato, é
-                # substituído (senão um .xlsx antigo continuaria com
-                # prioridade sobre um .csv novo) — mas só DEPOIS de o novo
-                # estar gravado (gravar_arquivo_substituindo(), em
-                # R/utils.R). Antes, o anterior era apagado primeiro e uma
-                # falha na cópia deixava a empresa sem o arquivo.
-                anteriores <- mag_arquivos_do_tipo(pasta, pendente$tipo[i])
+                # O arquivo anterior do mesmo tipo, em QUALQUER formato, é
+                # substituído (senão um .xlsx antigo continuaria com prioridade
+                # sobre um .csv novo) — mas só DEPOIS de o novo estar gravado
+                # (gravar_arquivo_substituindo(), em R/utils.R). Antes, o
+                # anterior era apagado primeiro e uma falha na cópia deixava a
+                # empresa sem o arquivo.
+                anteriores <- arquivos_do_tipo(pasta, pendente$tipo[i])
 
                 destino <- paste0(info$radical, ".", pendente$extensao[i])
 
@@ -2225,11 +2014,11 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             tipos <- vapply(
                 seq_len(nrow(up)),
                 function(i) {
-                    if (!(extensoes[i] %in% EXTENSOES_PLANILHA)) {
+                    if (!(extensoes[i] %in% EXTENSOES_SERVENTIAS)) {
                         return(NA_character_)
                     }
-                    identificar_tipo_arquivo_magistrados(
-                        ler_arquivo_magistrados(up$datapath[i], extensoes[i], up$name[i], n_max = 5),
+                    identificar_tipo_arquivo_serventias(
+                        ler_arquivo_serventias(up$datapath[i], extensoes[i], up$name[i], n_max = 5),
                         nome_arquivo = up$name[i]
                     )
                 },
@@ -2241,7 +2030,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             if (length(invalidos) > 0) {
                 showNotification(
                     sprintf(
-                        "Não reconhecido(s) como arquivo de Magistrados ou de Alertas de Magistrados em .xlsx ou .csv (ignorado[s]): %s. O arquivo precisa ter as colunas CPF e \"Órgão de lotação do magistrado(a)\".",
+                        "Não reconhecido(s) como arquivo de Serventias ou de Alertas de Serventias em .xlsx ou .csv (ignorado[s]): %s.",
                         paste(invalidos, collapse = ", ")
                     ),
                     type = "error",
@@ -2257,7 +2046,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             
             if (any(duplicated(tipos[validos]))) {
                 showNotification(
-                    "Foram selecionados dois arquivos do mesmo tipo. Envie no máximo um arquivo de cada tipo (base, envio e alertas de Magistrados).",
+                    "Foram selecionados dois arquivos do mesmo tipo. Envie no máximo um arquivo de cada tipo (base, envio e alertas de Serventias).",
                     type = "error",
                     duration = 12
                 )
@@ -2274,12 +2063,12 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             
             upload_pendente(pendente)
             
-            pasta <- pasta_magistrados(empresa())
+            pasta <- pasta_serventias(empresa())
             
             a_substituir <- vapply(
                 pendente$tipo,
                 function(t) {
-                    existentes <- mag_arquivos_do_tipo(pasta, t)
+                    existentes <- arquivos_do_tipo(pasta, t)
                     if (length(existentes) > 0) paste(basename(existentes), collapse = ", ") else NA_character_
                 },
                 character(1)
@@ -2313,64 +2102,66 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         })
         
         # =================================================
-        # ABA 3 — ALERTAS - MAGISTRADOS
+        # ABA 3 — ALERTAS - SERVENTIAS
         # =================================================
         
         MSG_SEM_ARQUIVOS <- paste0(
-            "Não existe arquivo de alertas de Magistrados (alertas_magistrados.csv ou alertas_magistrados.xlsx)",
+            "Não existe arquivo de alertas de Serventias (alertas_serventias.csv ou alertas_serventias.xlsx)",
             " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo."
         )
         
-        MSG_ALERTAS_SEM_RESULTADO <- "Nenhum registro encontrado com os filtros aplicados."
-        
-        MSG_SEM_BASE <- aba_base$msg_sem_dados
-        
-        # Espera o usuário parar de digitar (400 ms) antes de filtrar.
-        cpf_d <- debounce(reactive(input$cpf), 400)
+        # Espera o usuário parar de digitar (400 ms) antes de filtrar —
+        # antes, cada tecla refiltrava e redesenhava tabela e gráficos.
+        codigo_d <- debounce(reactive(input$codigo), 400)
         nome_d <- debounce(reactive(input$nome), 400)
         
+        MSG_ALERTAS_SEM_RESULTADO <- "Nenhum registro encontrado com os filtros aplicados."
+        
         dados_filtrados <- reactive({
-            df <- alertas_exibicao()
+            req(dados())
+            df <- dados()
             
-            if (nrow(df) == 0) {
-                return(df)
+            col_codigo <- coluna_serventia(df, REGEX_COL_CODIGO_SERVENTIA)
+            col_nome <- coluna_serventia(df, REGEX_COL_NOME_SERVENTIA)
+            
+            if (!is.null(codigo_d()) && str_trim(codigo_d()) != "" && !is.null(col_codigo)) {
+                df <- df %>%
+                    filter(str_detect(
+                        str_to_upper(as.character(.data[[col_codigo]])),
+                        fixed(str_to_upper(str_trim(codigo_d())))
+                    ))
             }
             
-            manter <- rep(TRUE, nrow(df))
+            if (!is.null(nome_d()) && str_trim(nome_d()) != "" && !is.null(col_nome)) {
+                df <- df %>%
+                    filter(str_detect(
+                        str_to_upper(as.character(.data[[col_nome]])),
+                        fixed(str_to_upper(str_trim(nome_d())))
+                    ))
+            }
             
-            filtrar_texto <- function(valor, regex) {
-                valor <- str_trim(valor %||% "")
-                col <- coluna_por_regex(df, regex)
-                if (valor != "" && !is.null(col)) {
-                    manter <<- manter & str_detect(
-                        normalizar_texto_busca(coalesce(df[[col]], "")),
-                        fixed(normalizar_texto_busca(valor))
-                    )
+            if (!is.null(input$alerta) && input$alerta != "Todos" && input$alerta %in% names(df)) {
+                df <- df %>%
+                    filter(!is.na(.data[[input$alerta]]) & str_trim(.data[[input$alerta]]) != "")
+            }
+            
+            if (!is.null(input$conflito) && input$conflito != "Todos" && input$conflito %in% names(df)) {
+                df <- df %>%
+                    filter(!is.na(.data[[input$conflito]]) & str_trim(.data[[input$conflito]]) != "")
+            }
+            
+            if (!is.null(input$status) && input$status != "Todos") {
+                status <- valores_coluna_exibicao(df, REGEX_COL_STATUS)
+                if (!is.null(status)) {
+                    df <- df[status == input$status, , drop = FALSE]
                 }
             }
             
-            filtrar_preenchida <- function(coluna) {
-                if (!is.null(coluna) && coluna != "Todos" && coluna %in% names(df)) {
-                    v <- df[[coluna]]
-                    manter <<- manter & !is.na(v) & str_trim(v) != ""
-                }
-            }
-            
-            filtrar_texto(cpf_d(), REGEX_COL_CPF)
-            filtrar_texto(nome_d(), REGEX_COL_NOME)
-            filtrar_preenchida(input$alerta)
-            filtrar_preenchida(input$conflito)
-            
-            if (!is.null(input$cargo) && input$cargo != "Todos") {
-                v <- valores_coluna_regex(df, REGEX_COL_CARGO)
-                if (!is.null(v)) manter <- manter & v == input$cargo
-            }
-            
-            df[manter, , drop = FALSE]
+            df
         })
         
         tabela_exibicao <- reactive({
-            consolidar_alertas_magistrados_tabela(dados_filtrados())
+            consolidar_alertas_serventias_tabela(dados_filtrados())
         })
         
         output$tabela <- renderDT({
@@ -2396,7 +2187,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             )
         })
         
-        # ---- Gráficos: tipo de Alerta/Conflito (echarts4r) e Cargo (ggiraph) ----
+        # ---- Gráficos: tipo de Alerta/Conflito (echarts4r) e Status (ggiraph) ----
         
         resumo_tipos <- reactive({
             if (nrow(dados()) == 0) {
@@ -2427,6 +2218,8 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             }) %>%
                 filter(Quantidade > 0) %>%
                 arrange(Quantidade) %>%
+                # Nomes longos (ex.: "Alerta: Geolocalização (...)") são
+                # quebrados em linhas para não espremer as barras.
                 mutate(Tipo = str_wrap(Tipo, 50))
             
             if (nrow(resumo) == 0) {
@@ -2436,7 +2229,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             list(resumo = resumo, mensagem = NULL)
         })
         
-        resumo_cargos <- reactive({
+        resumo_status <- reactive({
             if (nrow(dados()) == 0) {
                 return(list(resumo = NULL, mensagem = FALSE))
             }
@@ -2447,14 +2240,14 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                 return(list(resumo = NULL, mensagem = MSG_ALERTAS_SEM_RESULTADO))
             }
             
-            valores <- valores_coluna_regex(df, REGEX_COL_CARGO)
+            valores <- valores_coluna_exibicao(df, REGEX_COL_STATUS)
             
             if (is.null(valores)) {
-                return(list(resumo = NULL, mensagem = "Coluna \"Cargo\" não encontrada no arquivo carregado."))
+                return(list(resumo = NULL, mensagem = "Coluna \"Status\" não encontrada no arquivo carregado."))
             }
             
-            resumo <- tibble(Cargo = valores) %>%
-                count(Cargo, name = "Quantidade") %>%
+            resumo <- tibble(Status = valores) %>%
+                count(Status, name = "Quantidade") %>%
                 arrange(Quantidade)
             
             list(resumo = resumo, mensagem = NULL)
@@ -2486,28 +2279,28 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                 e_toolbox_feature(feature = "saveAsImage")
         })
         
-        output$grafico_cargo <- renderGirafe({
-            r <- resumo_cargos()
+        output$grafico_status <- renderGirafe({
+            r <- resumo_status()
             
             shiny::validate(need(is.null(r$mensagem), r$mensagem))
             
             resumo <- r$resumo %>%
                 mutate(
-                    rotulo = str_wrap(Cargo, 45),
+                    rotulo = str_wrap(Status, 45),
                     rotulo = factor(rotulo, levels = unique(rotulo)),
                     dica = sprintf(
                         "<b>%s</b><br/>%s registro(s)",
-                        htmltools::htmlEscape(Cargo),
+                        htmltools::htmlEscape(Status),
                         format(Quantidade, big.mark = ".", decimal.mark = ",")
                     )
                 )
             
             p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
-                geom_col_interactive(aes(tooltip = dica, data_id = Cargo), fill = "#2C7FB8") +
+                geom_col_interactive(aes(tooltip = dica, data_id = Status), fill = "#2C7FB8") +
                 geom_text(aes(label = Quantidade), hjust = -0.2) +
                 coord_flip() +
                 scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
-                labs(title = "Quantidade de Registros por Cargo", x = "", y = "Quantidade") +
+                labs(title = "Quantidade de Registros por Status", x = "", y = "Quantidade") +
                 theme_minimal()
             
             girafe(
@@ -2523,13 +2316,13 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         
         output$csv_ui <- renderUI({
             df <- tabela_exibicao()
-            ui_csv_dados(ns, "download_csv", !is.null(df) && nrow(df) > 0)
+            ui_csv_serventias(ns, "download_csv", !is.null(df) && nrow(df) > 0)
         })
         
         output$download_csv <- downloadHandler(
             
             filename = function() {
-                paste0("alertas-magistrados-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
+                paste0("alertas-serventias-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
             },
             
             content = function(file) {
@@ -2552,57 +2345,70 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         )
         
         # =================================================
-        # ABA 4 — INCONSISTÊNCIAS - MAGISTRADOS
+        # ABA 4 — INCONSISTÊNCIAS - SERVENTIAS
         # -------------------------------------------------
-        # Calculada sobre dados_base() (códigos originais). A tabela
-        # mostra Cargo e Situação por extenso (mesma tradução das outras
-        # abas) e o Órgão como "código - nome da serventia".
+        # Calculada sobre dados_base() (todos os registros, sem os
+        # filtros da aba Base de Dados).
         # =================================================
         
         inconsistencias <- reactive({
-            verificar_inconsistencias_magistrados(dados_base(), nomes_orgaos())
+            verificar_inconsistencias_serventias(dados_base(), lotacoes())
+        })
+        
+        sem_lotacoes <- reactive({
+            is.null(lotacoes()) || nrow(lotacoes()) == 0
+        })
+        
+        sem_status <- reactive({
+            is.null(coluna_serventia(dados_base(), REGEX_COL_STATUS))
         })
         
         mod_inconsistencias_server(
             "inc",
-            dados = reactive(traduzir_codigos_magistrados(inconsistencias())),
+            dados = inconsistencias,
             verificacoes = reactive({
-                sem_cargo3 <- !any(
-                    mag_codigo(valores_coluna_regex(dados_base(), REGEX_COL_CARGO)) == CARGO_MAG_DESEMBARGADOR,
-                    na.rm = TRUE
-                )
                 lista <- list(
-                    tagList(
-                        "Cargo 4 (Juiz(a) substituto(a) de 2º grau) exercendo Presidência, Vice, ",
-                        "Corregedoria, Ouvidoria ou Direção da Escola, ou lotado em gabinete de desembargador.",
-                        if (sem_cargo3) tags$b(" Nenhum registro da base usa o cargo 3 (Desembargador(a)).")
+                    list(descricao = "O mesmo código em mais de um registro da base. Alta: dois ou mais registros ativos."),
+                    list(
+                        descricao = "Serventia ativa sem CEP (Média) ou com CEP que não tem 8 dígitos / é sequência repetida (Alta).",
+                        indisponivel = is.null(coluna_serventia(dados_base(), REGEX_COL_CEP))
                     ),
-                    sprintf(
-                        "Aposentadoria (situação 10) com data de saída ou seguida de nova situação. Alta: houve retorno ou durou até %d dias.",
-                        LIMITE_DIAS_APOSENTADORIA_CURTA
+                    list(descricao = "Duas ou mais serventias ativas, com códigos diferentes, com o mesmo nome."),
+                    list(
+                        descricao = paste0(
+                            "Serventia com status diferente de \"Ativo\" que ainda é a lotação atual de magistrados ",
+                            "(módulo Magistrados) ou servidores (Quadro de Pessoal)."
+                        ),
+                        indisponivel = sem_status() || sem_lotacoes()
                     )
                 )
-                setNames(lista, c(VERIFICACAO_MAG_CARGO, VERIFICACAO_MAG_APOSENTADORIA))
+                setNames(lista, VERIFICACOES_SERVENTIAS)
             }),
             mensagem_sem_base = reactive({
                 if (nrow(dados_base()) == 0) MSG_SEM_BASE
             }),
             avisos = reactive({
-                if (length(nomes_orgaos()) == 0) {
+                if (nrow(dados_base()) > 0 && (sem_status() || sem_lotacoes())) {
                     div(
                         class = "alert alert-warning py-2",
                         style = "font-size: .85rem;",
                         icon("circle-info", class = "me-1"),
-                        "A base de Serventias não foi encontrada: a lotação em gabinete de desembargador ",
-                        "não pôde ser verificada (só as situações de direção foram consideradas). Envie-a ",
-                        "no módulo Serventias e clique em \"Atualizar Dados\"."
+                        if (sem_status()) {
+                            "A base de Serventias não tem a coluna Status: a verificação de serventia inativa com lotação ativa não pôde ser feita."
+                        } else {
+                            paste0(
+                                "Nenhum arquivo de Magistrados ou do Quadro de Pessoal foi encontrado: a verificação de ",
+                                "serventia inativa com lotação ativa não pôde ser feita. Envie-os nos respectivos módulos ",
+                                "e clique em \"Atualizar Dados\"."
+                            )
+                        }
                     )
                 }
             }),
-            col_entidade = "CPF",
-            rotulo_entidade = "magistrado(s)",
-            filtros_texto = c("CPF" = "CPF", "Nome" = "Nome"),
-            prefixo_csv = "inconsistencias-magistrados"
+            col_entidade = "Código Serventia",
+            rotulo_entidade = "serventia(s)",
+            filtros_texto = FILTROS_TEXTO_INC_SERVENTIAS,
+            prefixo_csv = "inconsistencias-serventias"
         )
         
     })

@@ -119,9 +119,9 @@ FarolJus/
 │   ├── database.R         # conexão com o IRIS (JDBC)
 │   └── tabelas_auxiliares.R  # códigos do MPM no SQLite (Cargo/Situação)
 ├── modules/
-│   ├── mod_alertas.R      # Pessoal e Auxiliar (base, envio, alertas, inconsistências)
-│   ├── mod_alertas_serventias.R  # Serventias (base, envio, alertas, inconsistências)
-│   ├── mod_alertas_magistrados.R # Magistrados (base, envio, alertas, inconsistências)
+│   ├── mod_pessoal_auxiliar.R      # Pessoal e Auxiliar (base, envio, alertas, inconsistências)
+│   ├── mod_serventias.R  # Serventias (base, envio, alertas, inconsistências)
+│   ├── mod_magistrados.R # Magistrados (base, envio, alertas, inconsistências)
 │   ├── mod_inconsistencias.R     # aba de inconsistências (comum aos módulos)
 │   ├── mod_painel.R       # Painel (indicadores de Magistrados e Servidores)
 │   ├── mod_matricula.R    # matrícula por nome (consulta ao IRIS)

@@ -9,11 +9,11 @@
 #     recolhe a barra mostrando a descrição de cada ícone.
 #   - A navegação entre os módulos é feita pela barra lateral (não há
 #     mais abas):
-#       "Magistrados"        -> mod_alertas_magistrados.R
+#       "Magistrados"        -> mod_magistrados.R
 #                               (<PASTA_ALERTAS>/<EMPRESA>/magistrados)
-#       "Pessoal e Auxiliar" -> mod_alertas.R
+#       "Pessoal e Auxiliar" -> mod_pessoal_auxiliar.R
 #                               (<PASTA_ALERTAS>/<EMPRESA>/pessoal)
-#       "Serventias"         -> mod_alertas_serventias.R
+#       "Serventias"         -> mod_serventias.R
 #                               (<PASTA_ALERTAS>/<EMPRESA>/serventias)
 #     (mesma ordem, ícones e aparência do FarolJus Lite; a barra começa
 #     expandida).
@@ -147,11 +147,11 @@ source(here::here("modules", "mod_totp_admin.R"))
 # Módulos de dados, Inconsistências e Painel — os mesmos do FarolJus
 # Lite (com o cache de leitura e a carga sob demanda do FarolJus). A
 # ordem importa: Serventias, Magistrados e Painel reaproveitam funções de
-# mod_alertas.R e mod_inconsistencias.R; o Painel usa os três.
-source(here::here("modules", "mod_alertas.R"))
+# mod_pessoal_auxiliar.R e mod_inconsistencias.R; o Painel usa os três.
+source(here::here("modules", "mod_pessoal_auxiliar.R"))
 source(here::here("modules", "mod_inconsistencias.R"))
-source(here::here("modules", "mod_alertas_serventias.R"))
-source(here::here("modules", "mod_alertas_magistrados.R"))
+source(here::here("modules", "mod_serventias.R"))
+source(here::here("modules", "mod_magistrados.R"))
 source(here::here("modules", "mod_painel.R"))
 
 # Tabelas de códigos do MPM no SQLite (editáveis no banco) — ver
@@ -165,13 +165,13 @@ source(here::here("R", "tabelas_auxiliares.R"))
 # barra lateral que o abre (atributo data-menu). ABA_INICIAL é o módulo
 # aberto após o login/logout.
 # =========================================================================
-ABA_ALERTAS_SERVENTIAS <- "AlertasServentias"
-ABA_ALERTAS_MAGISTRADOS <- "AlertasMagistrados"
-ABA_ALERTAS_QUADRO <- "Alertas"
+ABA_SERVENTIAS <- "Serventias"
+ABA_MAGISTRADOS <- "Magistrados"
+ABA_PESSOAL_AUXILIAR <- "PessoalAuxiliar"
 # Ordem, ícones e rótulos dos módulos na barra lateral — iguais aos do
 # FarolJus Lite (Magistrados, Pessoal e Auxiliar, Serventias). O primeiro
 # é o módulo aberto após o login.
-MENU_MODULOS <- c(ABA_ALERTAS_MAGISTRADOS, ABA_ALERTAS_QUADRO, ABA_ALERTAS_SERVENTIAS)
+MENU_MODULOS <- c(ABA_MAGISTRADOS, ABA_PESSOAL_AUXILIAR, ABA_SERVENTIAS)
 MENU_IDS <- setNames(c("ir_magistrados", "ir_pessoal", "ir_serventias"), MENU_MODULOS)
 MENU_ICONES <- setNames(c("gavel", "users", "building-columns"), MENU_MODULOS)
 MENU_ROTULOS <- setNames(c("Magistrados", "Pessoal e Auxiliar", "Serventias"), MENU_MODULOS)
@@ -964,7 +964,7 @@ ui <- fluidPage(
          FILTROS BLOQUEADOS (aba sem arquivo) e JANELA DE AVISO
          'nenhum arquivo para exibir' — ver o handler JS
          'bloquear-filtros', abaixo, e mostrar_alerta_sem_arquivo(),
-         em mod_alertas.R.
+         em mod_pessoal_auxiliar.R.
          ============================================= */
 
       .al-filtros-aviso {
@@ -1389,7 +1389,7 @@ ui <- fluidPage(
 
       );
 
-      // Enviado pelos módulos de alertas (mod_alertas*.R) depois de fechar os modais de
+      // Enviado pelos módulos de alertas (mod_pessoal_auxiliar.R, mod_magistrados.R e mod_serventias.R) depois de fechar os modais de
       // 'Gerenciar Arquivos'. Remove um backdrop do Bootstrap que tenha
       // ficado 'grudado' na tela (bloqueando cliques) quando um modal é
       // trocado por outro rapidamente. Sem este handler registrado, o
@@ -2334,15 +2334,15 @@ server <- function(input, output, session) {
     }
     
     observeEvent(input$ir_serventias, {
-        selecionar_menu(ABA_ALERTAS_SERVENTIAS)
+        selecionar_menu(ABA_SERVENTIAS)
     }, ignoreInit = TRUE)
     
     observeEvent(input$ir_magistrados, {
-        selecionar_menu(ABA_ALERTAS_MAGISTRADOS)
+        selecionar_menu(ABA_MAGISTRADOS)
     }, ignoreInit = TRUE)
     
     observeEvent(input$ir_pessoal, {
-        selecionar_menu(ABA_ALERTAS_QUADRO)
+        selecionar_menu(ABA_PESSOAL_AUXILIAR)
     }, ignoreInit = TRUE)
     
     observeEvent(input$ir_painel, {
@@ -2809,16 +2809,16 @@ server <- function(input, output, session) {
                     id = "menu",
                     selected = isolate(menuSelecionado()),
                     nav_panel_hidden(
-                        value = ABA_ALERTAS_MAGISTRADOS,
-                        mod_alertas_magistrados_ui("alertas_magistrados")
+                        value = ABA_MAGISTRADOS,
+                        mod_magistrados_ui("magistrados")
                     ),
                     nav_panel_hidden(
-                        value = ABA_ALERTAS_QUADRO,
-                        mod_alertas_ui("alertas")
+                        value = ABA_PESSOAL_AUXILIAR,
+                        mod_pessoal_auxiliar_ui("pessoal_auxiliar")
                     ),
                     nav_panel_hidden(
-                        value = ABA_ALERTAS_SERVENTIAS,
-                        mod_alertas_serventias_ui("alertas_serventias")
+                        value = ABA_SERVENTIAS,
+                        mod_serventias_ui("serventias")
                     ),
                     nav_panel_hidden(
                         value = ABA_PAINEL,
@@ -2858,21 +2858,21 @@ server <- function(input, output, session) {
         reactive(isTRUE(autenticado()) && identical(menuSelecionado(), aba))
     }
     
-    mod_alertas_serventias_server(
-        "alertas_serventias",
-        ativo = modulo_ativo(ABA_ALERTAS_SERVENTIAS),
+    mod_serventias_server(
+        "serventias",
+        ativo = modulo_ativo(ABA_SERVENTIAS),
         empresa = empresa_sessao
     )
     
-    mod_alertas_magistrados_server(
-        "alertas_magistrados",
-        ativo = modulo_ativo(ABA_ALERTAS_MAGISTRADOS),
+    mod_magistrados_server(
+        "magistrados",
+        ativo = modulo_ativo(ABA_MAGISTRADOS),
         empresa = empresa_sessao
     )
     
-    mod_alertas_server(
-        "alertas",
-        ativo = modulo_ativo(ABA_ALERTAS_QUADRO),
+    mod_pessoal_auxiliar_server(
+        "pessoal_auxiliar",
+        ativo = modulo_ativo(ABA_PESSOAL_AUXILIAR),
         empresa = empresa_sessao
     )
     
