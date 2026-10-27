@@ -9,19 +9,21 @@
 #     recolhe a barra mostrando a descrição de cada ícone.
 #   - A navegação entre os módulos é feita pela barra lateral (não há
 #     mais abas):
-#       "Serventias"         -> mod_alertas_serventias.R
-#                               (<PASTA_ALERTAS>/<EMPRESA>/serventias)
 #       "Magistrados"        -> mod_alertas_magistrados.R
 #                               (<PASTA_ALERTAS>/<EMPRESA>/magistrados)
 #       "Pessoal e Auxiliar" -> mod_alertas.R
 #                               (<PASTA_ALERTAS>/<EMPRESA>/pessoal)
+#       "Serventias"         -> mod_alertas_serventias.R
+#                               (<PASTA_ALERTAS>/<EMPRESA>/serventias)
+#     (mesma ordem, ícones e aparência do FarolJus Lite; a barra começa
+#     expandida).
 #     Todos recebem a empresa da sessão (distroSelecionado); os de
 #     Magistrados e de Pessoal também recebem a conexão SQLite (con),
 #     usada para traduzir os códigos de Situação Profissional Atual e
 #     Cargo (cada um com as próprias tabelas auxiliares).
-#   - Botão "Configurações": abre um submenu com "Administração" (janela
-#     modal com o cadastro TOTP e a auditoria de login), "Trocar empresa"
-#     e "Ver instruções". Administração e Trocar empresa só aparecem para
+#   - Botão "Configurações": abre/fecha, DENTRO da barra lateral, o grupo
+#     com "Trocar empresa", "Ver instruções" e "Administração" (janela
+#     modal com o cadastro TOTP e a auditoria de login). Administração e Trocar empresa só aparecem para
 #     quem entrou via Login Corporativo (AD); um usuário TOTP continua
 #     fixo na empresa do próprio cadastro. (Regra centralizada em
 #     ehAdmin() / podeTrocarEmpresa(), no server.)
@@ -159,7 +161,15 @@ source(here::here("modules", "mod_alertas_magistrados.R"))
 ABA_ALERTAS_SERVENTIAS <- "AlertasServentias"
 ABA_ALERTAS_MAGISTRADOS <- "AlertasMagistrados"
 ABA_ALERTAS_QUADRO <- "Alertas"
-ABA_INICIAL <- ABA_ALERTAS_SERVENTIAS
+# Ordem, ícones e rótulos dos módulos na barra lateral — iguais aos do
+# FarolJus Lite (Magistrados, Pessoal e Auxiliar, Serventias). O primeiro
+# é o módulo aberto após o login.
+MENU_MODULOS <- c(ABA_ALERTAS_MAGISTRADOS, ABA_ALERTAS_QUADRO, ABA_ALERTAS_SERVENTIAS)
+MENU_IDS <- setNames(c("ir_magistrados", "ir_pessoal", "ir_serventias"), MENU_MODULOS)
+MENU_ICONES <- setNames(c("gavel", "users", "building-columns"), MENU_MODULOS)
+MENU_ROTULOS <- setNames(c("Magistrados", "Pessoal e Auxiliar", "Serventias"), MENU_MODULOS)
+
+ABA_INICIAL <- MENU_MODULOS[1]
 
 # =========================================================================
 # ESQUEMA DO BANCO (usuarios_totp / login_auditoria + coluna "distro")
@@ -644,59 +654,71 @@ ui <- fluidPage(
       }
 
       /* =============================================
-         CONFIGURAÇÕES — submenu flutuante à direita da barra
+         GRUPO 'CONFIGURAÇÕES' — abre/fecha no próprio navegador
+         (sem ida ao servidor), mostrando Trocar empresa, Ver
+         instruções e Administração logo abaixo, DENTRO da barra
+         lateral (mesmo funcionamento do FarolJus Lite).
          ============================================= */
 
-      .icon-grupo {
-        position: relative;
-      }
-
-      .icon-bar.expandida .icon-grupo {
-        width: 100%;
-      }
-
-      .submenu-config {
-        display: none;
-        position: absolute;
-        top: 0;
-        left: calc(100% + 10px);
-        min-width: 220px;
-        background: #fff;
-        border: 1px solid rgba(0,0,0,.08);
-        border-radius: .6rem;
-        box-shadow: 0 .5rem 1.25rem rgba(15,23,42,.18);
-        padding: .35rem;
-        z-index: 1060;
-      }
-
-      .submenu-config.aberto {
-        display: block;
-      }
-
-      .submenu-config .submenu-titulo {
-        font-size: .7rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: .04em;
-        color: #6c757d;
-        padding: .35rem .6rem .25rem .6rem;
-      }
-
-      .submenu-config .submenu-item {
+      .icon-bar .icon-grupo {
         display: flex;
+        flex-direction: column;
         align-items: center;
-        gap: .6rem;
-        padding: .5rem .6rem;
-        border-radius: .4rem;
-        color: #212529;
-        font-size: .9rem;
-        text-decoration: none;
-        white-space: nowrap;
+        gap: 8px;
       }
 
-      .submenu-config .submenu-item:hover {
-        background: #eef4ff;
-        color: #0d6efd;
+      .icon-bar .icon-submenu {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 0;
+        border-radius: 8px;
+        background: rgba(255,255,255,.06);
+      }
+
+      .icon-bar .icon-grupo.aberto .icon-submenu {
+        display: flex;
+      }
+
+      .icon-bar .icon-grupo.aberto > .icon-btn {
+        background: rgba(255,255,255,.12);
+        color: #fff;
+      }
+
+      .icon-bar .icon-submenu .icon-btn {
+        width: 32px;
+        height: 32px;
+        font-size: 14px;
+      }
+
+      .icon-bar .icon-seta {
+        display: none;
+        margin-left: auto;
+        font-size: 11px;
+        transition: transform .15s ease;
+      }
+
+      .icon-bar .icon-grupo.aberto .icon-seta {
+        transform: rotate(180deg);
+      }
+
+      .icon-bar.expandida .icon-grupo,
+      .icon-bar.expandida .icon-submenu {
+        align-items: stretch;
+      }
+
+      .icon-bar.expandida .icon-submenu {
+        padding: 6px 0 6px 12px;
+      }
+
+      .icon-bar.expandida .icon-submenu .icon-btn {
+        width: 100%;
+        height: 32px;
+      }
+
+      .icon-bar.expandida .icon-seta {
+        display: inline;
       }
 
       #app-content {
@@ -1007,30 +1029,6 @@ ui <- fluidPage(
 
       );
 
-      // Submenu 'Configurações' — abre/fecha no navegador (sem ida ao
-      // servidor). Fecha ao escolher uma opção, ao clicar fora ou com Esc.
-      function fecharSubmenuConfig() {
-        $('#submenu_config').removeClass('aberto');
-        $('#btn_configuracoes').attr('aria-expanded', 'false');
-      }
-
-      $(document).on('click', '#btn_configuracoes', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        var aberto = $('#submenu_config').toggleClass('aberto').hasClass('aberto');
-        $(this).attr('aria-expanded', aberto ? 'true' : 'false');
-      });
-
-      $(document).on('click', '#submenu_config .submenu-item', fecharSubmenuConfig);
-
-      $(document).on('click', function(e) {
-        if (!$(e.target).closest('.icon-grupo').length) fecharSubmenuConfig();
-      });
-
-      $(document).on('keydown', function(e) {
-        if (e.key === 'Escape') fecharSubmenuConfig();
-      });
-
       // Destaca, na barra lateral, o botão do módulo aberto.
       Shiny.addCustomMessageHandler(
 
@@ -1165,14 +1163,15 @@ server <- function(input, output, session) {
     header_oculto <- reactiveVal(FALSE)
     
     # Barra lateral (ícones) expandida ou não — ver ícone "toggle_icon_bar"
-    # e o handler JS "toggle-icon-bar".
-    iconBarExpandida <- reactiveVal(FALSE)
+    # e o handler JS "toggle-icon-bar". Começa EXPANDIDA (com as descrições
+    # ao lado dos ícones), como no FarolJus Lite.
+    iconBarExpandida <- reactiveVal(TRUE)
     
     # ===================================================
     # MÓDULO SELECIONADO
     # ---------------------------------------------------
-    # Começa na aba inicial (ABA_INICIAL = "Alertas - Serventias", a
-    # primeira da esquerda). Precisa ser uma aba que existe, senão o
+    # Começa na aba inicial (ABA_INICIAL = Magistrados, o primeiro item
+    # da barra lateral). Precisa ser uma aba que existe, senão o
     # módulo correspondente fica com ativo() = FALSE até o usuário clicar
     # em uma aba.
     # ===================================================
@@ -1620,10 +1619,10 @@ server <- function(input, output, session) {
             menuSelecionado(ABA_INICIAL)
             
             # A tela principal é recriada no próximo login com o cabeçalho
-            # visível e a barra recolhida — o estado precisa acompanhar,
+            # visível e a barra expandida — o estado precisa acompanhar,
             # senão o primeiro clique nesses ícones "não faz nada".
             header_oculto(FALSE)
-            iconBarExpandida(FALSE)
+            iconBarExpandida(TRUE)
             
             # Ver comentário na definição de resetarAdminTotp acima.
             adminAberto(FALSE)
@@ -2012,103 +2011,93 @@ server <- function(input, output, session) {
                 # destacar o módulo aberto (handler "marcar-menu-ativo").
                 # -----------------------------------------------
                 
-                actionLink(
-                    "ir_serventias",
-                    tagList(
-                        icon("building-columns"),
-                        tags$span(class = "icon-label", "Serventias")
-                    ),
-                    class = paste(
-                        "icon-btn",
-                        if (identical(isolate(menuSelecionado()), ABA_ALERTAS_SERVENTIAS)) "ativo"
-                    ),
-                    title = "Serventias",
-                    `data-menu` = ABA_ALERTAS_SERVENTIAS
-                ),
+                # -----------------------------------------------
+                # MÓDULOS — mesma ordem e ícones do FarolJus Lite. data-menu
+                # liga o botão ao painel do navset "menu" e serve para
+                # destacar o módulo aberto (handler "marcar-menu-ativo").
+                # -----------------------------------------------
                 
-                actionLink(
-                    "ir_magistrados",
-                    tagList(
-                        icon("gavel"),
-                        tags$span(class = "icon-label", "Magistrados")
-                    ),
-                    class = paste(
-                        "icon-btn",
-                        if (identical(isolate(menuSelecionado()), ABA_ALERTAS_MAGISTRADOS)) "ativo"
-                    ),
-                    title = "Magistrados",
-                    `data-menu` = ABA_ALERTAS_MAGISTRADOS
-                ),
-                
-                actionLink(
-                    "ir_pessoal",
-                    tagList(
-                        icon("users"),
-                        tags$span(class = "icon-label", "Pessoal e Auxiliar")
-                    ),
-                    class = paste(
-                        "icon-btn",
-                        if (identical(isolate(menuSelecionado()), ABA_ALERTAS_QUADRO)) "ativo"
-                    ),
-                    title = "Pessoal e Auxiliar",
-                    `data-menu` = ABA_ALERTAS_QUADRO
-                ),
+                lapply(MENU_MODULOS, function(aba) {
+                    actionLink(
+                        MENU_IDS[[aba]],
+                        tagList(
+                            icon(MENU_ICONES[[aba]]),
+                            tags$span(class = "icon-label", MENU_ROTULOS[[aba]])
+                        ),
+                        class = paste(
+                            "icon-btn",
+                            if (identical(isolate(menuSelecionado()), aba)) "ativo"
+                        ),
+                        title = MENU_ROTULOS[[aba]],
+                        `data-menu` = aba
+                    )
+                }),
                 
                 # -----------------------------------------------
-                # CONFIGURAÇÕES — submenu com Administração, Trocar
-                # empresa e Ver instruções. Os IDs das opções são os
-                # mesmos dos antigos ícones, então os observeEvent()
-                # do server continuam valendo sem alteração. O
-                # abrir/fechar do submenu é só no navegador (JS
-                # fecharSubmenuConfig / #btn_configuracoes).
+                # CONFIGURAÇÕES — agrupa Trocar empresa, Ver instruções e
+                # Administração (as duas de admin só para quem pode). O
+                # clique em "Configurações" só abre/fecha o grupo no
+                # navegador (classe .aberto, ver CSS .icon-grupo), e as
+                # opções aparecem logo abaixo, dentro da própria barra
+                # lateral. Cada opção continua sendo um actionLink com o
+                # mesmo id de antes, tratado no servidor.
                 # -----------------------------------------------
                 
                 div(
                     class = "icon-grupo",
                     
                     tags$a(
-                        id = "btn_configuracoes",
                         href = "#",
                         class = "icon-btn",
                         title = "Configurações",
                         role = "button",
-                        `aria-haspopup` = "true",
                         `aria-expanded` = "false",
+                        onclick = paste0(
+                            "var g = this.parentElement; g.classList.toggle('aberto');",
+                            "this.setAttribute('aria-expanded', g.classList.contains('aberto'));",
+                            "return false;"
+                        ),
                         icon("gear"),
-                        tags$span(class = "icon-label", "Configurações")
+                        tags$span(class = "icon-label", "Configurações"),
+                        tags$span(class = "icon-seta", icon("chevron-down"))
                     ),
                     
                     div(
-                        id = "submenu_config",
-                        class = "submenu-config",
-                        role = "menu",
-                        
-                        div(class = "submenu-titulo", "Configurações"),
-                        
-                        if (ehAdmin()) {
-                            actionLink(
-                                "abrir_admin",
-                                tagList(icon("user-shield", class = "fa-fw"), "Administração"),
-                                class = "submenu-item",
-                                role = "menuitem"
-                            )
-                        },
+                        class = "icon-submenu",
                         
                         if (podeTrocarEmpresa()) {
                             actionLink(
                                 "trocar_empresa",
-                                tagList(icon("building", class = "fa-fw"), "Trocar empresa"),
-                                class = "submenu-item",
-                                role = "menuitem"
+                                tagList(
+                                    icon("building"),
+                                    tags$span(class = "icon-label", "Trocar empresa")
+                                ),
+                                class = "icon-btn",
+                                title = "Trocar empresa"
                             )
                         },
                         
                         actionLink(
                             "mostrar_readme",
-                            tagList(icon("circle-info", class = "fa-fw"), "Ver instruções"),
-                            class = "submenu-item",
-                            role = "menuitem"
-                        )
+                            tagList(
+                                icon("circle-info"),
+                                tags$span(class = "icon-label", "Ver instruções")
+                            ),
+                            class = "icon-btn",
+                            title = "Ver instruções (README)"
+                        ),
+                        
+                        if (ehAdmin()) {
+                            actionLink(
+                                "abrir_admin",
+                                tagList(
+                                    icon("user-shield"),
+                                    tags$span(class = "icon-label", "Administração")
+                                ),
+                                class = "icon-btn",
+                                title = "Administração"
+                            )
+                        }
                     )
                 ),
                 
@@ -2203,8 +2192,8 @@ server <- function(input, output, session) {
                 # ===============================================
                 # MÓDULOS (painéis sem abas)
                 # -----------------------------------------------
-                # A troca de painel é feita pelos botões "Serventias",
-                # "Magistrados" e "Pessoal e Auxiliar" da barra lateral (ver
+                # A troca de painel é feita pelos botões "Magistrados",
+                # "Pessoal e Auxiliar" e "Serventias" da barra lateral (ver
                 # selecionar_menu() no server).
                 # ===============================================
                 
@@ -2212,16 +2201,16 @@ server <- function(input, output, session) {
                     id = "menu",
                     selected = isolate(menuSelecionado()),
                     nav_panel_hidden(
-                        value = ABA_ALERTAS_SERVENTIAS,
-                        mod_alertas_serventias_ui("alertas_serventias")
-                    ),
-                    nav_panel_hidden(
                         value = ABA_ALERTAS_MAGISTRADOS,
                         mod_alertas_magistrados_ui("alertas_magistrados")
                     ),
                     nav_panel_hidden(
                         value = ABA_ALERTAS_QUADRO,
                         mod_alertas_ui("alertas")
+                    ),
+                    nav_panel_hidden(
+                        value = ABA_ALERTAS_SERVENTIAS,
+                        mod_alertas_serventias_ui("alertas_serventias")
                     )
                 )
                 

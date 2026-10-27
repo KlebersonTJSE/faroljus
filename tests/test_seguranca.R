@@ -440,6 +440,45 @@ testServer(mod_alertas_serventias_server,
 })
 
 # =====================================================
+cat("\n[11] Menu lateral: módulos e Configurações\n")
+# =====================================================
+
+pos_em <- function(h, x) regexpr(x, h, fixed = TRUE)[1]
+limpar_auditoria()
+testServer(server, {
+    session$setInputs(entrar = 0)
+    session$setInputs(usuario = "ana", senha = "senha certa", distro_ad = "TJSE", entrar = 1)
+    h <- as.character(output$tela_principal$html)
+    p_mag <- pos_em(h, 'data-menu="AlertasMagistrados"')
+    p_pes <- pos_em(h, 'data-menu="Alertas"')
+    p_serv <- pos_em(h, 'data-menu="AlertasServentias"')
+    p_cfg <- pos_em(h, 'class="icon-grupo"')
+    p_sair <- pos_em(h, 'id="sair"')
+    checar("ordem: Magistrados, Pessoal e Auxiliar, Serventias, Configurações, Sair",
+           all(c(p_mag, p_pes, p_serv, p_cfg, p_sair) > 0) &&
+               p_mag < p_pes && p_pes < p_serv && p_serv < p_cfg && p_cfg < p_sair)
+    checar("barra começa expandida", grepl('class="icon-bar expandida"', h, fixed = TRUE))
+    checar("módulo inicial é Magistrados", identical(menuSelecionado(), ABA_ALERTAS_MAGISTRADOS))
+    sub <- regmatches(h, regexpr('class="icon-submenu".*?id="sair"', h))
+    checar("opções de Configurações ficam dentro da barra (Trocar empresa, Ver instruções, Administração)",
+           length(sub) == 1 && pos_em(sub, 'id="trocar_empresa"') > 0 &&
+               pos_em(sub, 'id="trocar_empresa"') < pos_em(sub, 'id="mostrar_readme"') &&
+               pos_em(sub, 'id="mostrar_readme"') < pos_em(sub, 'id="abrir_admin"'))
+    checar("submenu flutuante antigo removido", !grepl("submenu-config", h, fixed = TRUE))
+})
+
+limpar_auditoria()
+invisible(dbExecute(con, "UPDATE usuarios_totp SET ultimo_contador = NULL"))
+testServer(server, {
+    session$setInputs(entrar_totp = 0)
+    session$setInputs(usuario_totp = "maria", codigo_totp = totp_gerar(chave("maria")), entrar_totp = 1)
+    h <- as.character(output$tela_principal$html)
+    checar("usuário TOTP vê só Ver instruções em Configurações",
+           grepl('id="mostrar_readme"', h, fixed = TRUE) &&
+               !grepl('id="trocar_empresa"', h, fixed = TRUE) && !grepl('id="abrir_admin"', h, fixed = TRUE))
+})
+
+# =====================================================
 
 cat(sprintf("\n%d de %d verificações passaram.\n", total - falhas, total))
 if (falhas > 0) quit(status = 1)
