@@ -1,5 +1,11 @@
 # R/utils.R
 
+# Operador "valor ou padrão" (base R só o tem a partir da 4.4). Definido
+# aqui porque utils.R é o primeiro arquivo carregado pelo app.R.
+if (!exists("%||%", mode = "function")) {
+    `%||%` <- function(a, b) if (is.null(a)) b else a
+}
+
 # =====================================================
 # EMPRESAS (MULTI-DISTRO)
 # =====================================================
@@ -78,37 +84,6 @@ extrair_manager <- function(manager){
     
 }
 
-formatar_when_created <- function(whenCreated){
-    
-    if(is.null(whenCreated))
-        return("")
-    
-    valor <- as.character(whenCreated)[1]
-    
-    dt <- tryCatch({
-        
-        as.POSIXct(
-            valor,
-            format="%Y%m%d%H%M%S.0Z",
-            tz="UTC"
-        )
-        
-    }, error=function(e){
-        
-        NA
-        
-    })
-    
-    if(is.na(dt))
-        return(valor)
-    
-    format(
-        dt,
-        "%d/%m/%Y %H:%M:%S"
-    )
-    
-}
-
 formatar_whenCreated <- function(x) {
     if (is.null(x) || is.na(x) || x == "") return("")
     
@@ -137,91 +112,162 @@ formatar_lastLogon <- function(x) {
     )
 }
 
-carregar_rejeitados <- function(){
+# =====================================================
+# NOME DE ARQUIVO SEGURO (upload)
+# -----------------------------------------------------
+# O nome original de um arquivo enviado (input$<fileInput>$name) vem do
+# navegador e pode ser manipulado — ex.: "../../MPRO/pessoal/x.csv"
+# gravaria o arquivo na pasta de OUTRA empresa, ou fora de data/.
+# Mantém só o último componente do caminho (tanto "/" quanto "\\"),
+# troca caracteres fora de letras/números/espaço/._()- por "_", tira
+# pontos/espaços do início e aceita só as extensões informadas.
+# Devolve NA quando o nome não serve. (Mesma função do FarolJus Lite.)
+# =====================================================
+
+nome_arquivo_seguro <- function(nome, extensao = c("csv", "xlsx")) {
     
-    arquivos <- list.files(
-        CAMINHO_REJEITADOS,
-        pattern = "\\.csv$",
-        full.names = TRUE
-    )
+    nome <- as.character(nome)
     
-    if(length(arquivos) == 0){
-        return(data.frame())
+    # Bytes UTF-8 válidos sem marcação de encoding (comum em locale "C")
+    # são marcados como UTF-8, para os acentos serem reconhecidos como
+    # letras abaixo.
+    sem_marca <- !is.na(nome) & Encoding(nome) == "unknown" & validUTF8(nome)
+    Encoding(nome[sem_marca]) <- "UTF-8"
+    
+    nome <- gsub("\\\\", "/", nome)
+    nome <- sub("^.*/", "", nome)
+    nome <- gsub("[^\\p{L}\\p{N} ._()-]", "_", enc2utf8(nome), perl = TRUE)
+    nome <- sub("^[. ]+", "", nome)
+    nome <- trimws(nome)
+    
+    ext <- tolower(tools::file_ext(nome))
+    base <- tools::file_path_sans_ext(nome)
+    
+    valido <- !is.na(nome) &
+        ext %in% tolower(extensao) &
+        nchar(trimws(base)) > 0 &
+        nchar(nome) <= 200
+    
+    ifelse(valido, nome, NA_character_)
+    
+}
+
+# =====================================================
+# CACHE DE ARQUIVOS LIDOS (compartilhado entre as sessões)
+# -----------------------------------------------------
+# Ler e limpar as planilhas do MPM/CNJ é a parte mais lenta do app (o
+# Quadro de Pessoal tem ~17 mil linhas em .xlsx). Antes, CADA sessão (cada
+# login, cada "Atualizar Dados", cada troca de empresa) relia todos os
+# arquivos do disco, inclusive dos módulos que nem estavam abertos.
+#
+# Todas as sessões do Shiny rodam no mesmo processo R, então o resultado
+# da leitura fica guardado aqui, por arquivo, e é reaproveitado enquanto
+# o arquivo não mudar. A "assinatura" do arquivo é caminho + data de
+# modificação + tamanho: enviar, substituir ou apagar o arquivo pelo
+# "Gerenciar Arquivos" (ou direto na pasta) muda a assinatura e a próxima
+# leitura vai ao disco. Não precisa invalidar nada manualmente.
+#
+# Resultados vazios/NULL (arquivo ilegível, sem linhas) não são guardados
+# — assim o aviso de erro continua aparecendo para quem tentar de novo.
+#
+# Limite: CACHE_ARQUIVOS_MAX entradas (padrão 30); passando disso, sai a
+# menos usada recentemente. CACHE_ARQUIVOS_MAX=0 no .Renviron desliga o
+# cache.
+# =====================================================
+
+CACHE_ARQUIVOS_MAX <- suppressWarnings(as.integer(Sys.getenv("CACHE_ARQUIVOS_MAX", unset = "30")))
+if (is.na(CACHE_ARQUIVOS_MAX) || CACHE_ARQUIVOS_MAX < 0) CACHE_ARQUIVOS_MAX <- 30L
+
+.cache_arquivos <- new.env(parent = emptyenv())
+
+assinatura_arquivo <- function(caminho) {
+    
+    if (is.null(caminho) || length(caminho) != 1 || is.na(caminho)) {
+        return(NULL)
     }
     
-    resultados <- map(
-        arquivos,
-        processar_rejeitado
+    info <- suppressWarnings(file.info(caminho, extra_cols = FALSE))
+    
+    if (is.na(info$size) || isTRUE(info$isdir)) {
+        return(NULL)
+    }
+    
+    paste(
+        normalizePath(caminho, winslash = "/", mustWork = FALSE),
+        format(as.numeric(info$mtime), nsmall = 3),
+        info$size,
+        sep = "|"
     )
     
-    bind_rows(
-        resultados
-    ) %>%
-        distinct()
-    
 }
 
-# =====================================================
-# EXTRAI MATRÍCULA
-# =====================================================
-
-extrair_matricula <- function(texto){
+com_cache_arquivo <- function(caminho, variante, ler) {
     
-    sapply(texto, function(x){
-        
-        partes <- str_split(
-            x,
-            " - ",
-            n = 2
-        )[[1]]
-        
-        trimws(partes[1])
-        
-    })
+    assinatura <- assinatura_arquivo(caminho)
     
-}
-
-# =====================================================
-# EXTRAI NOME
-# =====================================================
-
-extrair_nome <- function(texto){
+    if (CACHE_ARQUIVOS_MAX == 0 || is.null(assinatura)) {
+        return(ler())
+    }
     
-    sapply(texto, function(x){
-        
-        partes <- str_split(
-            x,
-            " - ",
-            n = 2
-        )[[1]]
-        
-        if(length(partes) >= 2){
-            
-            trimws(partes[2])
-            
-        } else {
-            
-            NA_character_
-            
-        }
-        
-    })
-    
-}
-
-# =====================================================
-# EXTRAI PERIODO
-# =====================================================
-
-formatar_periodo <- function(periodo){
-    
-    paste0(
-        str_extract(periodo, "\\d{4}$"),
-        str_pad(
-            str_extract(periodo, "^\\d{1,2}"),
-            width = 2,
-            pad = "0"
-        )
+    chave <- paste(
+        normalizePath(caminho, winslash = "/", mustWork = FALSE),
+        variante,
+        sep = "#"
     )
+    
+    item <- .cache_arquivos[[chave]]
+    
+    if (!is.null(item) && identical(item$assinatura, assinatura)) {
+        item$usado_em <- Sys.time()
+        assign(chave, item, envir = .cache_arquivos)
+        return(item$valor)
+    }
+    
+    valor <- ler()
+    
+    vazio <- is.null(valor) || (is.data.frame(valor) && nrow(valor) == 0)
+    
+    if (vazio) {
+        if (!is.null(item)) rm(list = chave, envir = .cache_arquivos)
+        return(valor)
+    }
+    
+    assign(
+        chave,
+        list(assinatura = assinatura, valor = valor, usado_em = Sys.time()),
+        envir = .cache_arquivos
+    )
+    
+    # Mantém no máximo CACHE_ARQUIVOS_MAX entradas (sai a menos usada).
+    chaves <- ls(.cache_arquivos, all.names = TRUE)
+    
+    if (length(chaves) > CACHE_ARQUIVOS_MAX) {
+        usados <- vapply(chaves, function(k) as.numeric(.cache_arquivos[[k]]$usado_em), numeric(1))
+        remover <- names(sort(usados))[seq_len(length(chaves) - CACHE_ARQUIVOS_MAX)]
+        rm(list = remover, envir = .cache_arquivos)
+    }
+    
+    valor
+    
+}
+
+# Descarta o cache (todo, ou só o dos arquivos dentro de `pasta`). Usado
+# pelo botão "Atualizar Dados", para garantir uma releitura do disco
+# mesmo que a data de modificação do arquivo não tenha mudado (ex.: cópia
+# que preserva a data original).
+limpar_cache_arquivos <- function(pasta = NULL) {
+    
+    chaves <- ls(.cache_arquivos, all.names = TRUE)
+    
+    if (!is.null(pasta)) {
+        prefixo <- paste0(normalizePath(pasta, winslash = "/", mustWork = FALSE), "/")
+        chaves <- chaves[startsWith(chaves, prefixo)]
+    }
+    
+    if (length(chaves) > 0) {
+        rm(list = chaves, envir = .cache_arquivos)
+    }
+    
+    invisible(TRUE)
     
 }

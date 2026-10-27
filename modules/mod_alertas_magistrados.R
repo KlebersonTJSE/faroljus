@@ -76,6 +76,9 @@ local({
         "consolidar_colunas_por_linha",
         "normalizar_nome_coluna",
         "ler_tabela_auxiliar",
+        "semear_tabelas_auxiliares",
+        "com_cache_arquivo",
+        "limpar_cache_arquivos",
         "codigo_para_nomenclatura",
         "EXTENSOES_PLANILHA",
         "ROTULO_VALOR_VAZIO",
@@ -177,7 +180,11 @@ carregar_arquivo_magistrados <- function(arquivo) {
         return(data.frame())
     }
     
-    limpar_dados_lidos(ler_arquivo_magistrados(arquivo))
+    # Lido e limpo uma vez por processo; reaproveitado por todas as
+    # sessões enquanto o arquivo não mudar (com_cache_arquivo(), R/utils.R).
+    com_cache_arquivo(arquivo, "magistrados", function() {
+        limpar_dados_lidos(ler_arquivo_magistrados(arquivo))
+    })
     
 }
 
@@ -287,30 +294,12 @@ SEMENTE_CARGO_MAGISTRADO <- c(
 
 garantir_tabelas_auxiliares_magistrados <- function(con) {
     
-    criar_e_semear <- function(tabela, semente) {
-        
-        DBI::dbExecute(
-            con,
-            sprintf(
-                "CREATE TABLE IF NOT EXISTS %s (codigo INTEGER PRIMARY KEY, nomenclatura TEXT NOT NULL)",
-                tabela
-            )
-        )
-        
-        for (i in seq_along(semente)) {
-            DBI::dbExecute(
-                con,
-                sprintf("INSERT OR IGNORE INTO %s (codigo, nomenclatura) VALUES (?, ?)", tabela),
-                params = list(as.integer(names(semente)[i]), unname(semente[i]))
-            )
-        }
-        
-    }
+    # Uma transação e uma vez por processo — ver
+    # semear_tabelas_auxiliares() em mod_alertas.R.
+    sementes <- list(SEMENTE_SITUACAO_PROFISSIONAL_MAGISTRADO, SEMENTE_CARGO_MAGISTRADO)
+    names(sementes) <- c(TAB_SITUACAO_PROFISSIONAL_MAGISTRADO, TAB_CARGO_MAGISTRADO)
     
-    criar_e_semear(TAB_SITUACAO_PROFISSIONAL_MAGISTRADO, SEMENTE_SITUACAO_PROFISSIONAL_MAGISTRADO)
-    criar_e_semear(TAB_CARGO_MAGISTRADO, SEMENTE_CARGO_MAGISTRADO)
-    
-    invisible(TRUE)
+    semear_tabelas_auxiliares(con, sementes)
     
 }
 
@@ -1193,9 +1182,29 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             input[[id_upload_atual()]]
         }
         
-        observeEvent(empresa(), {
-            req(empresa())
-            recarregar()
+        # Carga SOB DEMANDA (ver mod_alertas.R): só quando o módulo é
+        # aberto pela primeira vez para a empresa da sessão, em vez de logo
+        # no login. Com a empresa vazia (logout), os dados são descartados.
+        empresa_carregada <- reactiveVal(NULL)
+        
+        observeEvent(list(empresa(), ativo()), {
+            
+            if (!empresa_definida()) {
+                if (!is.null(empresa_carregada())) {
+                    dados_base(data.frame())
+                    dados(data.frame())
+                    empresa_carregada(NULL)
+                }
+                return(invisible(NULL))
+            }
+            
+            req(ativo())
+            
+            if (!identical(empresa_carregada(), empresa())) {
+                recarregar()
+                empresa_carregada(empresa())
+            }
+            
         }, ignoreInit = FALSE)
         
         # =================================================
@@ -1303,7 +1312,10 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             req(empresa())
             inicio <- Sys.time()
             
+            # "Atualizar Dados" sempre relê do disco.
+            limpar_cache_arquivos(pasta_magistrados(empresa()))
             recarregar()
+            empresa_carregada(empresa())
             atualizar_todos_combos()
             
             showNotification(
@@ -1953,6 +1965,10 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         
         MSG_ALERTAS_SEM_RESULTADO <- "Nenhum registro encontrado com os filtros aplicados."
         
+        # Espera o usuário parar de digitar (400 ms) antes de filtrar.
+        cpf_d <- debounce(reactive(input$cpf), 400)
+        nome_d <- debounce(reactive(input$nome), 400)
+        
         dados_filtrados <- reactive({
             df <- alertas_exibicao()
             
@@ -1980,8 +1996,8 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                 }
             }
             
-            filtrar_texto(input$cpf, REGEX_COL_CPF)
-            filtrar_texto(input$nome, REGEX_COL_NOME)
+            filtrar_texto(cpf_d(), REGEX_COL_CPF)
+            filtrar_texto(nome_d(), REGEX_COL_NOME)
             filtrar_preenchida(input$alerta)
             filtrar_preenchida(input$conflito)
             
@@ -2266,6 +2282,9 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             )
         })
         
+        inc_cpf_d <- debounce(reactive(input$inc_cpf), 400)
+        inc_nome_d <- debounce(reactive(input$inc_nome), 400)
+        
         inc_filtradas <- reactive({
             df <- inconsistencias_exibicao()
             
@@ -2283,12 +2302,12 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                 manter <- manter & df$Gravidade == input$inc_gravidade
             }
             
-            cpf <- str_trim(input$inc_cpf %||% "")
+            cpf <- str_trim(inc_cpf_d() %||% "")
             if (cpf != "") {
                 manter <- manter & str_detect(coalesce(df$CPF, ""), fixed(cpf))
             }
             
-            nome <- str_trim(input$inc_nome %||% "")
+            nome <- str_trim(inc_nome_d() %||% "")
             if (nome != "") {
                 manter <- manter & str_detect(
                     normalizar_texto_busca(coalesce(df$Nome, "")),

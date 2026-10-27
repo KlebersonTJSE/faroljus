@@ -31,17 +31,53 @@ ldap3 <- import("ldap3")
 # {DISTRO}_LDAP_PORT, {DISTRO}_LDAP_DOMAIN e {DISTRO}_LDAP_SEARCH_BASE.
 # Adicionar uma nova empresa não exige alterar este arquivo — só
 # DISTRO_N + as variáveis correspondentes no .Renviron.
-validar_config_ldap <- function(distro){
+# Antes, esta função gravava a configuração em variáveis GLOBAIS
+# (LDAP_SERVER <<- ...). Como todas as sessões do Shiny rodam no mesmo
+# processo R, uma sessão podia ler a configuração gravada por outra
+# (outra empresa). Agora a configuração é devolvida como lista, local a
+# cada chamada; NULL quando incompleta.
+obter_config_ldap <- function(distro){
     
-    LDAP_SERVER <<- Sys.getenv(distro_env(distro, "LDAP_SERVER"))
-    LDAP_PORT   <<- as.integer(Sys.getenv(distro_env(distro, "LDAP_PORT")))
-    LDAP_DOMAIN <<- Sys.getenv(distro_env(distro, "LDAP_DOMAIN"))
-    SEARCH_BASE <<- Sys.getenv(distro_env(distro, "LDAP_SEARCH_BASE"))
+    cfg <- list(
+        servidor    = Sys.getenv(distro_env(distro, "LDAP_SERVER")),
+        porta       = suppressWarnings(as.integer(Sys.getenv(distro_env(distro, "LDAP_PORT")))),
+        dominio     = Sys.getenv(distro_env(distro, "LDAP_DOMAIN")),
+        search_base = Sys.getenv(distro_env(distro, "LDAP_SEARCH_BASE"))
+    )
     
-    campos <- c(LDAP_SERVER, LDAP_PORT, LDAP_DOMAIN, SEARCH_BASE)
+    campos <- unlist(cfg)
     
-    all(!is.na(campos) & campos != "")
+    if (all(!is.na(campos) & campos != "")) cfg else NULL
 }
+
+validar_config_ldap <- function(distro){
+    !is.null(obter_config_ldap(distro))
+}
+
+# Usuário AD aceito no login: letras, números, ponto, hífen e
+# sublinhado (formato de sAMAccountName). Recusa qualquer outro
+# caractere antes de falar com o servidor — inclusive "@" (que permitiria
+# autenticar com um UPN de outro domínio) e os caracteres especiais de
+# filtro LDAP (*, (, ), \).
+USUARIO_AD_VALIDO <- "^[A-Za-z0-9._-]{1,64}$"
+
+# Escapa um valor para uso em filtro LDAP (RFC 4515). Defesa extra além
+# da validação acima.
+escapar_filtro_ldap <- function(x) {
+    x <- gsub("\\\\", "\\\\5c", x)
+    x <- gsub("\\*", "\\\\2a", x)
+    x <- gsub("\\(", "\\\\28", x)
+    gsub("\\)", "\\\\29", x)
+}
+
+# Somente os atributos usados pela aplicação (cabeçalho da tela
+# principal). Antes era ALL_ATTRIBUTES — trazia o objeto inteiro do AD
+# (grupos, foto, histórico...) a cada login: mais lento e guardava na
+# sessão dados que o app não usa.
+ATRIBUTOS_AD <- c(
+    "sAMAccountName", "displayName", "mail", "department",
+    "manager", "whenCreated", "lastLogonTimestamp"
+)
 
 # =====================================================
 # AUTENTICAÇÃO ACTIVE DIRECTORY
@@ -64,7 +100,9 @@ authenticate_ad <- function(
         
     }
     
-    if(!validar_config_ldap(distro)){
+    cfg <- obter_config_ldap(distro)
+    
+    if(is.null(cfg)){
         
         stop(
             "Configuração LDAP não encontrada para a empresa '", distro, "'."
@@ -82,11 +120,14 @@ authenticate_ad <- function(
     }
     
     usuario <- trimws(usuario)
-    senha   <- trimws(senha)
     
+    # A senha NÃO é aparada: espaços nas pontas fazem parte dela. Senha
+    # vazia é recusada antes do bind — um bind com senha vazia vira
+    # "unauthenticated bind" e pode ser aceito pelo servidor.
     if(
-        usuario == "" ||
-        senha == ""
+        !grepl(USUARIO_AD_VALIDO, usuario) ||
+        !nzchar(senha) ||
+        !nzchar(trimws(senha))
     ){
         
         return(NULL)
@@ -95,20 +136,22 @@ authenticate_ad <- function(
     
     servidor <- ldap3$Server(
         
-        LDAP_SERVER,
+        cfg$servidor,
         
-        port = LDAP_PORT,
+        port = cfg$porta,
         
         use_ssl = TRUE,
         
-        get_info = ldap3$NONE
+        get_info = ldap3$NONE,
+        
+        connect_timeout = 10L
         
     )
     
     usuario_ad <- paste0(
         usuario,
         "@",
-        LDAP_DOMAIN
+        cfg$dominio
     )
     
     conexao <- ldap3$Connection(
@@ -119,13 +162,15 @@ authenticate_ad <- function(
         
         password = senha,
         
-        auto_bind = FALSE
+        auto_bind = FALSE,
+        
+        receive_timeout = 15L
         
     )
     
     autenticado <- tryCatch({
         
-        conexao$bind()
+        isTRUE(conexao$bind())
         
     },
     
@@ -137,6 +182,8 @@ authenticate_ad <- function(
     
     if(!autenticado){
         
+        try(conexao$unbind(), silent = TRUE)
+        
         return(NULL)
         
     }
@@ -145,17 +192,19 @@ authenticate_ad <- function(
         
         filtro <- paste0(
             "(sAMAccountName=",
-            usuario,
+            escapar_filtro_ldap(usuario),
             ")"
         )
         
         conexao$search(
             
-            search_base = SEARCH_BASE,
+            search_base = cfg$search_base,
             
             search_filter = filtro,
             
-            attributes = ldap3$ALL_ATTRIBUTES
+            attributes = as.list(ATRIBUTOS_AD),
+            
+            size_limit = 1L
             
         )
         
@@ -254,7 +303,9 @@ obter_foto_usuario <- function(
 
 testar_ldap <- function(distro){
     
-    if(!validar_config_ldap(distro)){
+    cfg <- obter_config_ldap(distro)
+    
+    if(is.null(cfg)){
         return(FALSE)
     }
     
@@ -262,9 +313,9 @@ testar_ldap <- function(distro){
         
         servidor <- ldap3$Server(
             
-            LDAP_SERVER,
+            cfg$servidor,
             
-            port = LDAP_PORT,
+            port = cfg$porta,
             
             use_ssl = TRUE,
             

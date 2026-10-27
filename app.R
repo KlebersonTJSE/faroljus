@@ -102,6 +102,28 @@ con <- dbConnect(
     DB_PATH
 )
 
+# Desempenho/concorrência do SQLite:
+#   - WAL: leituras (telas, auditoria) não ficam bloqueadas por uma
+#     gravação (login, cadastro) e cada gravação custa menos E/S;
+#   - synchronous = NORMAL: seguro com WAL e bem mais rápido que FULL;
+#   - busy_timeout: com mais de um processo R (Shiny Server/Connect com
+#     vários workers), espera até 5 s pelo lock em vez de falhar na hora
+#     com "database is locked".
+# Falha em algum PRAGMA não impede o app de subir.
+#
+# ATENÇÃO: o modo WAL não funciona em pasta de rede (SMB/NFS). Se data/
+# estiver num compartilhamento de rede, defina SQLITE_WAL=FALSE no
+# .Renviron (o banco continua no modo padrão, só sem o ganho do WAL).
+SQLITE_WAL <- !identical(toupper(Sys.getenv("SQLITE_WAL", unset = "TRUE")), "FALSE")
+
+for (pragma in c(
+    if (SQLITE_WAL) c("PRAGMA journal_mode = WAL", "PRAGMA synchronous = NORMAL"),
+    "PRAGMA busy_timeout = 5000"
+)) {
+    try(DBI::dbExecute(con, pragma), silent = TRUE)
+}
+rm(pragma)
+
 # Fecha a conexão SQLite quando a aplicação for encerrada.
 onStop(function() {
     try(DBI::dbDisconnect(con), silent = TRUE)
@@ -147,6 +169,50 @@ ABA_INICIAL <- ABA_ALERTAS_SERVENTIAS
 # faz a migração da coluna "distro" num banco antigo. Idempotente.
 # =========================================================================
 garantir_schema_totp(con)
+
+# Tabelas auxiliares (Situação Profissional / Cargo de servidores e
+# magistrados): criadas e semeadas UMA vez por processo, aqui, em vez de
+# a cada sessão aberta (antes eram ~40 INSERTs no SQLite a cada acesso
+# à tela de login). As funções vêm de mod_alertas.R e
+# mod_alertas_magistrados.R; um erro não derruba o app — sem as tabelas,
+# os códigos só aparecem como vieram no arquivo.
+tryCatch(
+    garantir_tabelas_auxiliares(con),
+    error = function(e) warning("Não foi possível preparar as tabelas auxiliares: ", conditionMessage(e))
+)
+tryCatch(
+    garantir_tabelas_auxiliares_magistrados(con),
+    error = function(e) warning("Não foi possível preparar as tabelas auxiliares de magistrados: ", conditionMessage(e))
+)
+
+# Quem é administrador (Administração TOTP e Trocar empresa). Sem
+# ADMINS_AD no .Renviron, vale a regra antiga: QUALQUER login AD
+# bem-sucedido é admin — ou seja, todo servidor com conta no AD pode
+# criar acessos TOTP para qualquer empresa. Com ADMINS_AD (logins AD
+# separados por vírgula, sem diferenciar maiúsculas, como no AD), só eles.
+ADMINS_AD <- tolower(trimws(strsplit(Sys.getenv("ADMINS_AD", unset = ""), ",")[[1]]))
+ADMINS_AD <- ADMINS_AD[nzchar(ADMINS_AD)]
+
+if (length(ADMINS_AD) == 0) {
+    message(
+        "ADMINS_AD não definida: todo login AD tem acesso à Administração. ",
+        "Defina ADMINS_AD no .Renviron para restringir."
+    )
+}
+
+usuario_eh_admin_ad <- function(login) {
+    if (length(ADMINS_AD) == 0) {
+        return(TRUE)
+    }
+    !is.null(login) && tolower(trimws(login)) %in% ADMINS_AD
+}
+
+# Limite de tentativas inválidas por sessão do navegador (complementa o
+# bloqueio por login de login_bloqueado(), em R/auth_totp.R, que impede
+# testar códigos/senhas de um mesmo login; este impede usar uma única
+# sessão para varrer muitos logins diferentes). Igual ao FarolJus Lite.
+LOGIN_MAX_FALHAS_SESSAO <- suppressWarnings(as.integer(Sys.getenv("LOGIN_MAX_FALHAS_SESSAO", unset = "10")))
+if (is.na(LOGIN_MAX_FALHAS_SESSAO) || LOGIN_MAX_FALHAS_SESSAO < 1) LOGIN_MAX_FALHAS_SESSAO <- 10L
 
 # =========================================================================
 # EMPRESAS (MULTI-DISTRO)
@@ -1056,6 +1122,42 @@ server <- function(input, output, session) {
     # login AD, ou herdada do cadastro TOTP (ver R/auth_totp.R).
     distroSelecionado <- reactiveVal(NULL)
     
+    # Tentativas de login inválidas nesta sessão do navegador (ver
+    # LOGIN_MAX_FALHAS_SESSAO).
+    falhasSessao <- reactiveVal(0L)
+    
+    # Verificações comuns aos dois métodos de login, ANTES de consultar o
+    # AD ou o banco: limite por sessão e bloqueio por login (força bruta).
+    # Devolve TRUE se a tentativa pode seguir.
+    tentativa_permitida <- function(login_informado) {
+        
+        if (falhasSessao() >= LOGIN_MAX_FALHAS_SESSAO) {
+            showNotification(
+                "Muitas tentativas inválidas nesta sessão. Recarregue a página e tente mais tarde.",
+                type = "error",
+                duration = 10
+            )
+            return(FALSE)
+        }
+        
+        if (login_bloqueado(con, login_informado)) {
+            registrar_auditoria(con, login_informado, "BLOQUEADO", FALSE)
+            falhasSessao(falhasSessao() + 1L)
+            showNotification(
+                paste0(
+                    "Muitas tentativas inválidas para este usuário. ",
+                    "Aguarde ", LOGIN_JANELA_MIN, " minutos e tente novamente."
+                ),
+                type = "error",
+                duration = 10
+            )
+            return(FALSE)
+        }
+        
+        TRUE
+        
+    }
+    
     # ===================================================
     # ESTADO DO CABEÇALHO
     # ===================================================
@@ -1094,7 +1196,9 @@ server <- function(input, output, session) {
     # ===================================================
     
     ehAdmin <- reactive({
-        isTRUE(autenticado()) && identical(metodoAutenticado(), "AD")
+        isTRUE(autenticado()) &&
+            identical(metodoAutenticado(), "AD") &&
+            usuario_eh_admin_ad(usuarioLogado())
     })
     
     podeTrocarEmpresa <- reactive({
@@ -1331,16 +1435,27 @@ server <- function(input, output, session) {
                 
             }
             
+            login_informado <- trimws(input$usuario)
+            
+            if (!tentativa_permitida(login_informado)) {
+                return(invisible(NULL))
+            }
+            
+            # O detalhe técnico do erro (servidor, porta, mensagem do
+            # ldap3) vai só para o log do servidor — na tela, mensagem
+            # genérica, para não expor a infraestrutura a quem não entrou.
             dados <- tryCatch(
                 authenticate_ad(
-                    input$usuario,
+                    login_informado,
                     input$senha,
                     distro_escolhida
                 ),
                 error = function(e) {
                     
+                    warning("Erro ao consultar o Active Directory (", distro_escolhida, "): ", conditionMessage(e))
+                    
                     showNotification(
-                        paste("Erro ao consultar o Active Directory:", conditionMessage(e)),
+                        "Não foi possível consultar o Active Directory agora. Tente novamente em instantes.",
                         type = "error"
                     )
                     
@@ -1351,7 +1466,7 @@ server <- function(input, output, session) {
             
             registrar_auditoria(
                 con,
-                input$usuario,
+                login_informado,
                 paste0("AD:", distro_escolhida),
                 !is.null(dados)
             )
@@ -1359,7 +1474,7 @@ server <- function(input, output, session) {
             if (!is.null(dados)) {
                 
                 autenticado(TRUE)
-                usuarioLogado(input$usuario)
+                usuarioLogado(login_informado)
                 dadosUsuario(dados)
                 
                 metodoAutenticado("AD")
@@ -1382,6 +1497,8 @@ server <- function(input, output, session) {
                 )
                 
             } else {
+                
+                falhasSessao(falhasSessao() + 1L)
                 
                 showNotification(
                     "Usuário ou senha inválidos",
@@ -1411,9 +1528,15 @@ server <- function(input, output, session) {
                 input$codigo_totp
             )
             
+            login_informado <- trimws(input$usuario_totp)
+            
+            if (!tentativa_permitida(login_informado)) {
+                return(invisible(NULL))
+            }
+            
             dados <- autenticar_totp(
                 con,
-                input$usuario_totp,
+                login_informado,
                 input$codigo_totp
             )
             
@@ -1463,6 +1586,8 @@ server <- function(input, output, session) {
                 
             } else {
                 
+                falhasSessao(falhasSessao() + 1L)
+                
                 showNotification(
                     "Usuário ou código inválido",
                     type = "error"
@@ -1503,6 +1628,13 @@ server <- function(input, output, session) {
             # Ver comentário na definição de resetarAdminTotp acima.
             adminAberto(FALSE)
             resetarAdminTotp(resetarAdminTotp() + 1)
+            
+            # Recarrega a página: descarta TODO o estado da sessão (dados
+            # e filtros dos módulos — CPF/nome digitados —, chave
+            # recém-gerada no admin etc.), para que nada do usuário anterior
+            # fique na memória da sessão ou visível para quem fizer login
+            # em seguida na mesma aba. (Igual ao FarolJus Lite.)
+            session$reload()
             
         },
         
@@ -2112,23 +2244,37 @@ server <- function(input, output, session) {
     # NULL (o req(empresa()) do botão "Gerenciar Arquivos" abortava em
     # silêncio e nenhum dado era carregado) e, sem con, as colunas
     # Situação Profissional Atual / Cargo continuavam em código.
+    #
+    # `ativo` e `empresa` exigem sessão AUTENTICADA: os módulos são
+    # iniciados para toda sessão (inclusive na tela de login), e é a
+    # empresa que libera leitura, envio e exclusão de arquivos. Antes,
+    # `empresa` era o próprio distroSelecionado e `ativo` valia TRUE para
+    # Serventias já na tela de login.
+    empresa_sessao <- reactive({
+        if (isTRUE(autenticado())) distroSelecionado() else NULL
+    })
+    
+    modulo_ativo <- function(aba) {
+        reactive(isTRUE(autenticado()) && identical(menuSelecionado(), aba))
+    }
+    
     mod_alertas_serventias_server(
         "alertas_serventias",
-        ativo = reactive(menuSelecionado() == ABA_ALERTAS_SERVENTIAS),
-        empresa = distroSelecionado
+        ativo = modulo_ativo(ABA_ALERTAS_SERVENTIAS),
+        empresa = empresa_sessao
     )
     
     mod_alertas_magistrados_server(
         "alertas_magistrados",
-        ativo = reactive(menuSelecionado() == ABA_ALERTAS_MAGISTRADOS),
-        empresa = distroSelecionado,
+        ativo = modulo_ativo(ABA_ALERTAS_MAGISTRADOS),
+        empresa = empresa_sessao,
         con = con
     )
     
     mod_alertas_server(
         "alertas",
-        ativo = reactive(menuSelecionado() == ABA_ALERTAS_QUADRO),
-        empresa = distroSelecionado,
+        ativo = modulo_ativo(ABA_ALERTAS_QUADRO),
+        empresa = empresa_sessao,
         con = con
     )
     

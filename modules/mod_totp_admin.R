@@ -239,9 +239,24 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
         # o formulário é limpo (ver input$limpar_campos abaixo).
         proxy_tabela_totp <- DT::dataTableProxy("tabela_totp")
         
+        # ---------------------------------------------------------------
+        # AUTORIZAÇÃO (lado do servidor)
+        # -----------------------------------------------------------------
+        # Este módulo é iniciado para TODA sessão — inclusive antes do login
+        # e para usuários TOTP. Esconder a janela na interface não basta: o
+        # navegador consegue disparar qualquer input (ex.:
+        # Shiny.setInputValue("totp_admin-cadastrar", 1)) mesmo sem o botão
+        # na tela. Por isso, toda ação e toda saída com dado sensível exigem
+        # ativo() (= login AD E janela de Administração aberta, ver app.R).
+        # Sem isso, qualquer visitante conseguia recadastrar a chave TOTP de
+        # um usuário e ler o segredo novo (mesma correção do FarolJus Lite).
+        # ---------------------------------------------------------------
+        
         observeEvent(input$cadastrar, {
             
-            login  <- trimws(input$login)
+            req(ativo())
+            
+            login  <- trimws(input$login %||% "")
             nome   <- trimws(input$nome)
             distro <- input$distro
             
@@ -289,7 +304,9 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
         
         observeEvent(input$desativar, {
             
-            login <- trimws(input$login_desativar)
+            req(ativo())
+            
+            login <- trimws(input$login_desativar %||% "")
             
             if (login == "") {
                 showNotification(
@@ -321,6 +338,7 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
         
         output$resultado_cadastro <- renderUI({
             
+            req(ativo())
             req(ultimo_cadastro())
             r <- ultimo_cadastro()
             
@@ -465,7 +483,11 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
             registrar_tempo_bd("Consulta de auditoria de login", t0)
             
             if (nrow(dados) > 0) {
-                dados$datahora_dt <- as.POSIXct(dados$datahora, tz = "America/Maceio")
+                # Registros novos são gravados em UTC ("...Z"); os antigos,
+                # na hora local. converter_datahora_auditoria()
+                # (R/auth_totp.R) trata os dois e devolve no fuso local.
+                dados$datahora_dt <- converter_datahora_auditoria(dados$datahora)
+                dados$datahora <- format(dados$datahora_dt, "%Y-%m-%d %H:%M:%S")
                 dados$periodo <- classificar_periodo(
                     as.integer(format(dados$datahora_dt, "%H"))
                 )
@@ -659,6 +681,8 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
         # com os dados da linha clicada na tabela.
         # ---------------------------------------------------------------
         observeEvent(input$tabela_totp_rows_selected, {
+            
+            req(ativo())
             
             idx <- input$tabela_totp_rows_selected
             req(idx)

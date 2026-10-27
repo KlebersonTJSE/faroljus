@@ -49,16 +49,42 @@ base32_decode <- function(secret) {
 }
 
 # -----------------------------------------------------
-# GERAÇÃO DE CHAVE SECRETA (base32, 160 bits)
+# BASE32 (RFC 4648) - codificação (sem padding "=", como os
+# Authenticators esperam)
 # -----------------------------------------------------
 
-gerar_totp_secret <- function(tamanho = 32) {
-    
-    paste(
-        sample(.base32_alphabet, tamanho, replace = TRUE),
+base32_encode <- function(bytes) {
+
+    bits <- paste(
+        vapply(as.integer(bytes), function(b) {
+            paste(rev(as.integer(intToBits(b))[1:8]), collapse = "")
+        }, character(1)),
         collapse = ""
     )
-    
+
+    sobra <- (5 - nchar(bits) %% 5) %% 5
+    bits  <- paste0(bits, strrep("0", sobra))
+
+    inicios <- seq(1, nchar(bits), by = 5)
+    idx <- strtoi(substring(bits, inicios, inicios + 4), base = 2)
+
+    paste(.base32_alphabet[idx + 1], collapse = "")
+
+}
+
+# -----------------------------------------------------
+# GERAÇÃO DE CHAVE SECRETA (base32, 160 bits)
+# -----------------------------------------------------
+# Usa o gerador criptográfico do sistema (openssl::rand_bytes), como no
+# FarolJus Lite. A versão anterior usava sample(), cujo gerador
+# (Mersenne-Twister) é previsível e afetado por qualquer set.seed() feito
+# no processo — não serve para gerar segredo de autenticação.
+# -----------------------------------------------------
+
+gerar_totp_secret <- function(n_bytes = 20) {
+
+    base32_encode(openssl::rand_bytes(n_bytes))
+
 }
 
 # -----------------------------------------------------
@@ -124,32 +150,44 @@ totp_gerar <- function(secret_base32, tempo = Sys.time(), passo = 30, digitos = 
 
 # Verifica com tolerância de +/- 1 passo (30s) para lidar com
 # pequenas diferenças de relógio entre servidor e celular.
-totp_verificar <- function(secret_base32, codigo, tempo = Sys.time(),
-                           passo = 30, digitos = 6, janela = 1) {
-    
+#
+# Devolve o CONTADOR (passo de 30s) que bateu com o código, ou NA se
+# nenhum bateu. Quem chama usa esse contador para impedir que o mesmo
+# código seja reaproveitado (ver autenticar_totp(), coluna
+# usuarios_totp.ultimo_contador).
+totp_contador_valido <- function(secret_base32, codigo, tempo = Sys.time(),
+                                 passo = 30, digitos = 6, janela = 1) {
+
     codigo <- trimws(as.character(codigo))
-    
-    if (!grepl(paste0("^[0-9]{", digitos, "}$"), codigo)) {
-        return(FALSE)
+
+    if (length(codigo) != 1 || !grepl(paste0("^[0-9]{", digitos, "}$"), codigo)) {
+        return(NA_real_)
     }
-    
+
     contador_atual <- floor(as.numeric(tempo) / passo)
-    
+
     for (desvio in -janela:janela) {
-        
+
         esperado <- tryCatch(
             hotp_gerar(secret_base32, contador_atual + desvio, digitos),
             error = function(e) NA_character_
         )
-        
+
         if (!is.na(esperado) && identical(esperado, codigo)) {
-            return(TRUE)
+            return(contador_atual + desvio)
         }
-        
+
     }
-    
-    FALSE
-    
+
+    NA_real_
+
+}
+
+totp_verificar <- function(secret_base32, codigo, tempo = Sys.time(),
+                           passo = 30, digitos = 6, janela = 1) {
+
+    !is.na(totp_contador_valido(secret_base32, codigo, tempo, passo, digitos, janela))
+
 }
 
 # -----------------------------------------------------
@@ -217,25 +255,105 @@ gerar_qrcode_base64 <- function(texto) {
 # AUDITORIA DE LOGIN (tabela login_auditoria)
 # -----------------------------------------------------
 
+# A data/hora é gravada SEMPRE em UTC, no formato ISO 8601 com "Z"
+# (ex.: 2026-10-15T13:00:00Z) — o SQLite entende esse formato em
+# date()/julianday(). Antes era gravada na hora local do servidor sem
+# fuso (mesma correção do FarolJus Lite). O login é limitado a 100
+# caracteres: o campo vem do navegador e não deve inflar o banco.
 registrar_auditoria <- function(con, login, metodo, sucesso) {
-    
+
     tryCatch({
-        
+
         DBI::dbExecute(
             con,
             "INSERT INTO login_auditoria (login, metodo, sucesso, datahora) VALUES (?, ?, ?, ?)",
             params = list(
-                login,
+                substr(trimws(as.character(login %||% "")), 1, 100),
                 metodo,
-                as.integer(sucesso),
-                format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+                as.integer(isTRUE(sucesso)),
+                format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
             )
         )
-        
+
     }, error = function(e) {
         warning(paste("Falha ao gravar auditoria de login:", e$message))
     })
-    
+
+}
+
+# Fuso usado para EXIBIR a auditoria (e classificar Manhã/Tarde/Noite).
+FUSO_AUDITORIA <- Sys.getenv("FUSO_AUDITORIA", unset = "America/Maceio")
+
+# Converte a coluna datahora da auditoria para POSIXct no fuso local.
+# Aceita os dois formatos que podem existir no banco:
+#   - novo:   "2026-10-15T13:00:00Z"  (UTC)
+#   - antigo: "2026-10-15 10:00:00"   (hora local de quem gravou — é
+#             interpretado em FUSO_AUDITORIA, como o código antigo fazia)
+converter_datahora_auditoria <- function(x) {
+
+    x <- as.character(x)
+    eh_utc <- !is.na(x) & grepl("Z$", x)
+
+    segundos <- rep(NA_real_, length(x))
+
+    segundos[eh_utc] <- as.numeric(as.POSIXct(
+        x[eh_utc], format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"
+    ))
+
+    segundos[!eh_utc] <- as.numeric(as.POSIXct(
+        x[!eh_utc], format = "%Y-%m-%d %H:%M:%S", tz = FUSO_AUDITORIA
+    ))
+
+    as.POSIXct(segundos, origin = "1970-01-01", tz = FUSO_AUDITORIA)
+
+}
+
+# -----------------------------------------------------
+# BLOQUEIO POR TENTATIVAS (força bruta)
+# -----------------------------------------------------
+# Um código TOTP tem só 6 dígitos; sem limite, um script consegue testar
+# códigos sem parar até acertar — e, no login AD, testar senhas de um
+# servidor pelo app. Depois de LOGIN_MAX_FALHAS falhas para o MESMO login
+# (qualquer método) dentro de LOGIN_JANELA_MIN minutos, contadas a partir
+# do último acesso bem-sucedido, o login fica bloqueado até a janela
+# passar. As tentativas feitas durante o bloqueio são auditadas com
+# método "BLOQUEADO" e não prolongam o bloqueio. (Mesma regra do FarolJus
+# Lite.)
+# -----------------------------------------------------
+
+LOGIN_MAX_FALHAS <- suppressWarnings(as.integer(Sys.getenv("LOGIN_MAX_FALHAS", unset = "5")))
+if (is.na(LOGIN_MAX_FALHAS) || LOGIN_MAX_FALHAS < 1) LOGIN_MAX_FALHAS <- 5L
+
+LOGIN_JANELA_MIN <- suppressWarnings(as.integer(Sys.getenv("LOGIN_JANELA_MIN", unset = "15")))
+if (is.na(LOGIN_JANELA_MIN) || LOGIN_JANELA_MIN < 1) LOGIN_JANELA_MIN <- 15L
+
+login_bloqueado <- function(con, login) {
+
+    login <- substr(trimws(as.character(login %||% "")), 1, 100)
+
+    falhas <- tryCatch(
+        DBI::dbGetQuery(
+            con,
+            sprintf("
+            SELECT COUNT(*) AS n
+            FROM login_auditoria
+            WHERE login = ?
+              AND sucesso = 0
+              AND metodo <> 'BLOQUEADO'
+              AND julianday(datahora) >= julianday('now', '-%d minutes')
+              AND julianday(datahora) > COALESCE((
+                    SELECT MAX(julianday(datahora))
+                    FROM login_auditoria
+                    WHERE login = ? AND sucesso = 1
+                  ), 0)
+            ", LOGIN_JANELA_MIN),
+            params = list(login, login)
+        )$n[1],
+        error = function(e) 0
+    )
+
+    isTRUE(falhas >= LOGIN_MAX_FALHAS)
+
 }
 
 # -----------------------------------------------------
@@ -341,9 +459,28 @@ garantir_schema_totp <- function(con) {
     if (!("distro" %in% colunas_totp)) {
         DBI::dbExecute(con, "ALTER TABLE usuarios_totp ADD COLUMN distro TEXT")
     }
-    
+
+    # Migração: último contador TOTP aceito para cada login — impede que
+    # um código já usado (ex.: visto por cima do ombro) seja reaproveitado
+    # dentro da janela de 90s em que ainda seria válido.
+    if (!("ultimo_contador" %in% colunas_totp)) {
+        DBI::dbExecute(con, "ALTER TABLE usuarios_totp ADD COLUMN ultimo_contador INTEGER")
+    }
+
+    # Índices da auditoria: login_bloqueado() roda a cada tentativa de
+    # login e filtra por login; a tela de Administração filtra por data.
+    # Sem índice, as duas consultas varrem a tabela inteira, que só cresce.
+    DBI::dbExecute(
+        con,
+        "CREATE INDEX IF NOT EXISTS idx_login_auditoria_login ON login_auditoria (login, sucesso)"
+    )
+    DBI::dbExecute(
+        con,
+        "CREATE INDEX IF NOT EXISTS idx_login_auditoria_datahora ON login_auditoria (datahora)"
+    )
+
     invisible(TRUE)
-    
+
 }
 
 # -----------------------------------------------------
@@ -359,22 +496,34 @@ autenticar_totp <- function(con, login, codigo) {
     
     registro <- DBI::dbGetQuery(
         con,
-        "SELECT login, nome, secret_key, distro, ativo FROM usuarios_totp WHERE login = ? AND ativo = 1",
+        "SELECT login, nome, secret_key, distro, ativo, ultimo_contador FROM usuarios_totp WHERE login = ? AND ativo = 1",
         params = list(login)
     )
-    
+
     sucesso <- FALSE
     dados   <- NULL
-    
+
     if (nrow(registro) == 1) {
-        
-        valido <- tryCatch(
-            totp_verificar(registro$secret_key[1], codigo),
-            error = function(e) FALSE
+
+        contador <- tryCatch(
+            totp_contador_valido(registro$secret_key[1], codigo),
+            error = function(e) NA_real_
         )
-        
+
+        ultimo <- suppressWarnings(as.numeric(registro$ultimo_contador[1]))
+
+        # Código certo, mas de um passo igual ou anterior ao último já
+        # aceito: é reaproveitamento — tratado como falha.
+        valido <- !is.na(contador) && (is.na(ultimo) || contador > ultimo)
+
         if (valido) {
-            
+
+            DBI::dbExecute(
+                con,
+                "UPDATE usuarios_totp SET ultimo_contador = ? WHERE login = ?",
+                params = list(contador, registro$login[1])
+            )
+
             sucesso <- TRUE
             
             dados <- list(
@@ -428,7 +577,9 @@ cadastrar_usuario_totp <- function(con, login, nome, distro) {
         
         DBI::dbExecute(
             con,
-            "UPDATE usuarios_totp SET nome = ?, secret_key = ?, distro = ?, ativo = 1 WHERE login = ?",
+            # Chave nova => zera o anti-replay (os contadores da chave
+            # antiga não têm relação com os da nova).
+            "UPDATE usuarios_totp SET nome = ?, secret_key = ?, distro = ?, ativo = 1, ultimo_contador = NULL WHERE login = ?",
             params = list(nome, secret, distro, login)
         )
         

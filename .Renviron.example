@@ -1,0 +1,55 @@
+# =====================================================
+# Modelo de variáveis de ambiente do FarolJus.
+# Copie para .Renviron e preencha com os valores reais.
+# O .Renviron NUNCA deve ir para o Git (está no .gitignore).
+# =====================================================
+
+# Empresas/unidades atendidas (sequencial, sem pular números).
+DISTRO_1=TJSE
+# DISTRO_2=MPRO
+
+# Active Directory de cada empresa (<EMPRESA>_LDAP_*). Porta 636 (LDAPS).
+TJSE_LDAP_SERVER=
+TJSE_LDAP_PORT=636
+TJSE_LDAP_DOMAIN=
+TJSE_LDAP_SEARCH_BASE=
+
+# Logins AD com acesso à Administração e à troca de empresa (separados
+# por vírgula). Vazio = qualquer login AD bem-sucedido é administrador.
+ADMINS_AD=
+
+# Banco IRIS (InterSystems) de cada empresa (<EMPRESA>_IRIS_*).
+IRIS_DRIVER_CLASS=com.intersystems.jdbc.IRISDriver
+IRIS_JAR_PATH=
+TJSE_IRIS_URL=
+TJSE_IRIS_USER=
+TJSE_IRIS_PASSWORD=
+
+# Java (rJava) e Python com ldap3 (login AD).
+JAVA_HOME=
+RETICULATE_PYTHON=
+
+# Pasta raiz dos arquivos (<PASTA_ALERTAS>/<EMPRESA>/{pessoal,serventias,magistrados}).
+PASTA_ALERTAS=data
+
+# Limite total de upload por envio, em MB.
+MAX_UPLOAD_MB=50
+
+# Nome exibido no aplicativo Authenticator.
+TOTP_EMISSOR=Farol Jus
+
+# Bloqueio por tentativas: após LOGIN_MAX_FALHAS falhas do mesmo login em
+# LOGIN_JANELA_MIN minutos, o login fica bloqueado até a janela passar.
+LOGIN_MAX_FALHAS=5
+LOGIN_JANELA_MIN=15
+LOGIN_MAX_FALHAS_SESSAO=10
+
+# Fuso usado para exibir a auditoria de login (gravada em UTC).
+FUSO_AUDITORIA=America/Maceio
+
+# Arquivos lidos mantidos em cache na memória (0 desliga).
+CACHE_ARQUIVOS_MAX=30
+
+# Modo WAL do SQLite (mais rápido com acessos simultâneos). Use FALSE se
+# a pasta data/ estiver em um compartilhamento de rede (SMB/NFS).
+SQLITE_WAL=TRUE

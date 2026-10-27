@@ -169,7 +169,11 @@ carregar_arquivo_serventias <- function(arquivo) {
         return(data.frame())
     }
     
-    limpar_dados_lidos(ler_arquivo_serventias(arquivo))
+    # Lido e limpo uma vez por processo; reaproveitado por todas as
+    # sessões enquanto o arquivo não mudar (com_cache_arquivo(), R/utils.R).
+    com_cache_arquivo(arquivo, "serventias", function() {
+        limpar_dados_lidos(ler_arquivo_serventias(arquivo))
+    })
     
 }
 
@@ -711,9 +715,29 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         # CARREGA DADOS DA EMPRESA ATUAL (login / troca de empresa)
         # ----------------------------------------
         
-        observeEvent(empresa(), {
-            req(empresa())
-            recarregar()
+        # Carga SOB DEMANDA (ver mod_alertas.R): só quando o módulo é
+        # aberto pela primeira vez para a empresa da sessão, em vez de logo
+        # no login. Com a empresa vazia (logout), os dados são descartados.
+        empresa_carregada <- reactiveVal(NULL)
+        
+        observeEvent(list(empresa(), ativo()), {
+            
+            if (!empresa_definida()) {
+                if (!is.null(empresa_carregada())) {
+                    dados_base(data.frame())
+                    dados(data.frame())
+                    empresa_carregada(NULL)
+                }
+                return(invisible(NULL))
+            }
+            
+            req(ativo())
+            
+            if (!identical(empresa_carregada(), empresa())) {
+                recarregar()
+                empresa_carregada(empresa())
+            }
+            
         }, ignoreInit = FALSE)
         
         # =================================================
@@ -798,7 +822,10 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             req(empresa())
             inicio <- Sys.time()
             
+            # "Atualizar Dados" sempre relê do disco.
+            limpar_cache_arquivos(pasta_serventias(empresa()))
             recarregar()
+            empresa_carregada(empresa())
             atualizar_todos_combos()
             
             showNotification(
@@ -1483,6 +1510,10 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo."
         )
         
+        # Espera o usuário parar de digitar (400 ms) antes de filtrar.
+        codigo_d <- debounce(reactive(input$codigo), 400)
+        nome_d <- debounce(reactive(input$nome), 400)
+        
         dados_filtrados <- reactive({
             req(dados())
             df <- dados()
@@ -1490,19 +1521,22 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             col_codigo <- coluna_serventia(df, REGEX_COL_CODIGO_SERVENTIA)
             col_nome <- coluna_serventia(df, REGEX_COL_NOME_SERVENTIA)
             
-            if (!is.null(input$codigo) && str_trim(input$codigo) != "" && !is.null(col_codigo)) {
+            codigo <- str_trim(codigo_d() %||% "")
+            nome <- str_trim(nome_d() %||% "")
+            
+            if (codigo != "" && !is.null(col_codigo)) {
                 df <- df %>%
                     filter(str_detect(
-                        str_to_upper(as.character(.data[[col_codigo]])),
-                        fixed(str_to_upper(str_trim(input$codigo)))
+                        str_to_upper(coalesce(as.character(.data[[col_codigo]]), "")),
+                        fixed(str_to_upper(codigo))
                     ))
             }
             
-            if (!is.null(input$nome) && str_trim(input$nome) != "" && !is.null(col_nome)) {
+            if (nome != "" && !is.null(col_nome)) {
                 df <- df %>%
                     filter(str_detect(
-                        str_to_upper(as.character(.data[[col_nome]])),
-                        fixed(str_to_upper(str_trim(input$nome)))
+                        str_to_upper(coalesce(as.character(.data[[col_nome]]), "")),
+                        fixed(str_to_upper(nome))
                     ))
             }
             
