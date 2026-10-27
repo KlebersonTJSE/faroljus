@@ -1583,6 +1583,41 @@ novo_envio_vazio <- function(colunas = character(0)) {
        fora_situacao = character(0))
 }
 
+# Cartão "Gerar Novo Envio" da aba Envio > Gerar arquivo CSV, com o
+# mesmo visual em Pessoal e Auxiliar, Magistrados e Serventias. O botão
+# baixa ns("novo_envio_download") e fica desabilitado sem linhas.
+ui_novo_envio <- function(ns, pode_gerar, descricao, resumo) {
+
+  div(
+    class = "mt-4 pt-3 border-top",
+    style = "max-width: 640px;",
+
+    div(class = "al-modal-secao-titulo", icon("paper-plane", class = "text-primary"), "Gerar Novo Envio"),
+
+    p(class = "text-muted", descricao),
+
+    div(class = "mb-2", style = "font-size: .85rem;", resumo),
+
+    if (pode_gerar) {
+      downloadButton(
+        ns("novo_envio_download"),
+        "Gerar Novo Envio",
+        icon = icon("paper-plane"),
+        class = "btn btn-primary btn-acao"
+      )
+    } else {
+      tags$button(
+        type = "button",
+        class = "btn btn-primary btn-acao",
+        disabled = "disabled",
+        icon("paper-plane", class = "me-2"),
+        "Gerar Novo Envio"
+      )
+    }
+  )
+
+}
+
 gerar_novo_envio_duplicidade <- function(envio, base, alertas) {
 
   if (is.null(envio) || ncol(envio) == 0) {
