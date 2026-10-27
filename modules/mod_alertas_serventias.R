@@ -254,10 +254,14 @@ identificar_tipo_arquivo_serventias <- function(df, nome_arquivo = NULL) {
         return(NA_character_)
     }
     
-    # Sem colunas de alerta, com CEP: base, ou envio se o nome do arquivo
-    # tiver "envio" (mesma regra de identificar_tipo_arquivo_pessoal()).
-    eh_envio <- !is.null(nome_arquivo) && length(nome_arquivo) == 1 && !is.na(nome_arquivo) &&
-        str_detect(normalizar_nome_arquivo(nome_arquivo), REGEX_NOME_ARQUIVO_ENVIO)
+    # Sem colunas de alerta: base ou envio. É envio quando o nome do
+    # arquivo tem "envio" (mesma regra de Pessoal e Auxiliar) OU quando
+    # não tem a coluna Status — o MPM acrescenta Status na base que ele
+    # devolve; o arquivo gerado pelo órgão para envio não tem (ex.:
+    # "Magistrados_i.xlsx", "serventias_i.xlsx").
+    eh_envio <- (!is.null(nome_arquivo) && length(nome_arquivo) == 1 && !is.na(nome_arquivo) &&
+        str_detect(normalizar_nome_arquivo(nome_arquivo), REGEX_NOME_ARQUIVO_ENVIO)) ||
+        is.null(coluna_serventia(df, REGEX_COL_STATUS))
     
     if (eh_envio) "envio" else "base"
     
@@ -595,6 +599,74 @@ verificar_inconsistencias_serventias <- function(base, lotacoes = NULL) {
 ui_csv_serventias <- ui_csv_dados
 
 # =====================================================
+# NOVO ENVIO — SERVENTIAS COM ALERTA
+# -----------------------------------------------------
+# O arquivo de Serventias não tem CPF nem datas de situação, então a
+# regra de Pessoal e Auxiliar (encerrar o registro anterior e incluir o
+# novo) não se aplica. Aqui o "Gerar Novo Envio" gera um CSV só com as
+# linhas do arquivo de ENVIO cujo Código Serventia aparece no arquivo de
+# ALERTAS com algum alerta/conflito preenchido — exatamente como estão
+# no envio (mesmas colunas e ordem; datas seriais do Excel em
+# dd/mm/aaaa), para reenviar ao MPM depois de corrigidas.
+#
+# Devolve list(dados, codigos_alerta, sem_envio): códigos com alerta e,
+# entre eles, os que não estão no arquivo de envio.
+# =====================================================
+
+gerar_novo_envio_serventias <- function(envio, alertas) {
+    
+    colunas <- if (is.null(envio)) character(0) else names(envio)
+    vazio <- list(dados = novo_envio_vazio(colunas)$dados, codigos_alerta = character(0), sem_envio = character(0))
+    
+    if (is.null(envio) || ncol(envio) == 0 || is.null(alertas) || nrow(alertas) == 0) {
+        return(vazio)
+    }
+    
+    col_cod_alertas <- coluna_serventia(alertas, REGEX_COL_CODIGO_SERVENTIA)
+    cols_alerta <- c(colunas_por_prefixo(alertas, "Alerta"), colunas_por_prefixo(alertas, "Conflito"))
+    
+    if (is.null(col_cod_alertas) || length(cols_alerta) == 0) {
+        return(vazio)
+    }
+    
+    tem_alerta <- Reduce(`|`, lapply(cols_alerta, function(c) {
+        v <- alertas[[c]]
+        !is.na(v) & str_trim(v) != ""
+    }))
+    
+    codigos <- unique(codigo_limpo(alertas[[col_cod_alertas]][tem_alerta]))
+    codigos <- codigos[!is.na(codigos) & codigos != ""]
+    
+    if (length(codigos) == 0) {
+        return(vazio)
+    }
+    
+    vazio$codigos_alerta <- codigos
+    
+    col_cod_envio <- coluna_serventia(envio, REGEX_COL_CODIGO_SERVENTIA)
+    
+    if (is.null(col_cod_envio) || nrow(envio) == 0) {
+        vazio$sem_envio <- codigos
+        return(vazio)
+    }
+    
+    cod_envio <- codigo_limpo(envio[[col_cod_envio]])
+    
+    dados <- envio[cod_envio %in% codigos, , drop = FALSE]
+    dados <- as.data.frame(lapply(dados, function(v) { v <- as.character(v); v[is.na(v)] <- ""; v }),
+                           check.names = FALSE, stringsAsFactors = FALSE)
+    names(dados) <- colunas
+    rownames(dados) <- NULL
+    
+    for (c in colunas[str_detect(normalizar_nome_coluna(colunas), REGEX_COLS_DATA_ENVIO)]) {
+        dados[[c]] <- data_formato_envio(dados[[c]])
+    }
+    
+    list(dados = dados, codigos_alerta = codigos, sem_envio = setdiff(codigos, cod_envio))
+    
+}
+
+# =====================================================
 # ABA DE CADASTRO (Base de Dados / Envio - Serventias)
 # -----------------------------------------------------
 # Mesma estrutura de Pessoal e Auxiliar: as abas Base de Dados e Envio
@@ -717,7 +789,7 @@ ui_aba_cadastro_serventias <- function(ns, p, titulo, icone) {
 # os dados filtrados, a função que atualiza os combos e a mensagem de
 # "sem arquivo" (usada na janela de aviso).
 servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
-                                             msg_sem_dados, nome_csv) {
+                                             msg_sem_dados, nome_csv, extra_csv = NULL) {
     
     ns <- session$ns
     id <- function(x) paste0(p, "_", x)
@@ -907,8 +979,13 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
     
     # ---- Gerar arquivo CSV ----
     
+    # `extra_csv`: UI adicional da aba "Gerar arquivo CSV" (no Envio, o
+    # botão "Gerar Novo Envio").
     output[[id("csv_ui")]] <- renderUI({
-        ui_csv_serventias(ns, id("download_csv"), nrow(filtrados()) > 0)
+        tagList(
+            ui_csv_serventias(ns, id("download_csv"), nrow(filtrados()) > 0),
+            if (is.function(extra_csv)) extra_csv()
+        )
     })
     
     output[[id("download_csv")]] <- downloadHandler(
@@ -1346,7 +1423,63 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
                 " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo",
                 " (o nome do arquivo precisa conter \"envio\")."
             ),
-            nome_csv = "envio-serventias"
+            nome_csv = "envio-serventias",
+            extra_csv = function() uiOutput(ns("novo_envio_ui"))
+        )
+        
+        # ---- Envio > Gerar arquivo CSV > "Gerar Novo Envio" ----
+        # Ver gerar_novo_envio_serventias(): as linhas do envio das
+        # serventias que estão no arquivo de alertas, sem alteração (os
+        # filtros da aba não se aplicam).
+        novo_envio <- reactive({
+            gerar_novo_envio_serventias(dados_envio(), dados())
+        })
+        
+        output$novo_envio_ui <- renderUI({
+            
+            r <- novo_envio()
+            
+            ui_novo_envio(
+                ns, nrow(r$dados) > 0,
+                descricao = tagList(
+                    "Gera um arquivo com as linhas do arquivo de envio das serventias cujo ",
+                    tags$b("Código Serventia"), " aparece no arquivo de ", tags$b("Alertas"),
+                    " com algum alerta ou conflito, exatamente como estão no envio (mesmas colunas e ordem), ",
+                    "para reenviar ao MPM. Os filtros desta aba não se aplicam."
+                ),
+                resumo = if (length(r$codigos_alerta) == 0) {
+                    "Nenhuma serventia com alerta no arquivo de alertas."
+                } else {
+                    tagList(
+                        sprintf("%d serventia(s) com alerta; %d linha(s) no novo envio.",
+                                length(r$codigos_alerta), nrow(r$dados)),
+                        if (length(r$sem_envio) > 0) {
+                            div(class = "text-warning", sprintf(
+                                "%d serventia(s) com alerta não estão no arquivo de envio: %s.",
+                                length(r$sem_envio), paste(head(r$sem_envio, 10), collapse = ", ")
+                            ))
+                        }
+                    )
+                }
+            )
+            
+        })
+        
+        output$novo_envio_download <- downloadHandler(
+            
+            filename = function() {
+                paste0("novo-envio-serventias-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
+            },
+            
+            content = function(file) {
+                r <- novo_envio()
+                readr::write_excel_csv2(r$dados, file, na = "")
+                
+                showNotification(
+                    sprintf("Novo envio gerado: %d linha(s).", nrow(r$dados)),
+                    type = "message"
+                )
+            }
         )
         
         dados_base_filtrados <- aba_base$filtrados
