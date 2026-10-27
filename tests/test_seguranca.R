@@ -1205,6 +1205,123 @@ testServer(mod_alertas_serventias_server, args = list(empresa = reactive("MPRO")
 })
 
 # =====================================================
+cat("\n[13] Magistrados e Serventias: Gerar Novo Envio e tabelas do envio\n")
+# =====================================================
+
+# Magistrados: alerta "cargos distintos ativos" (como vem do MPM).
+mag_base_ne <- data.frame(
+    CPF = c("00979548535", "00979548535", "00979548535", "11111111111", "22222222222", "33333333333"),
+    Nome = c("JAIR", "JAIR", "JAIR", "ANA", "BRUNO", "CARLA"),
+    `Órgão de lotação do magistrado(a)` = c("32", "32", "8673", "10", "20", "30"),
+    Cargo = c("2", "2", "1", "2", "2", "2"),
+    `Situação profissional atual` = c("8", "10", "8", "8", "10", "8"),
+    `Data de início da situação` = c("17/10/2018", "18/01/2025", "14/09/2026", "01/01/2020", "01/01/2020", "01/01/2020"),
+    `Data de saída da situação` = c("", "", "", "", "", "01/06/2026"),
+    Status = c("Ativo", "Inativo", "Ativo", "Ativo", "Inativo", "Inativo"),
+    `Exclusão de registro por erro` = "N",
+    check.names = FALSE
+)
+mag_envio_ne <- data.frame(
+    CPF = c("979548535", "11111111111", "22222222222", "33333333333", "44444444444"),
+    Nome = c("JAIR", "ANA", "BRUNO", "CARLA", "DIEGO"),
+    `Órgão de lotação do magistrado(a)` = c("8404", "10", "20", "30", "40"),
+    Cargo = c("1", "2", "1", "1", "1"),
+    `Situação profissional atual` = c("8", "16", "8", "8", "8"),
+    `Data de início da situação` = c("46279", "01/09/2026", "01/09/2026", "01/09/2026", "01/09/2026"),
+    `Data de saída da situação` = "",
+    `Exclusão de registro por erro` = "N",
+    check.names = FALSE
+)
+mag_alertas_ne <- data.frame(
+    CPF = c("00979548535", "11111111111", "22222222222", "33333333333", "55555555555", "66666666666"),
+    Nome = "x",
+    `Alerta: Inconsistência` = c(rep("Há cargos distintos ativos para o mesmo CPF informado. Favor verificar...", 5), NA),
+    `Alerta: Email` = c(NA, NA, NA, NA, NA, "E-mail inválido"),
+    check.names = FALSE
+)
+rm_ <- gerar_novo_envio_magistrados(mag_envio_ne, mag_base_ne, mag_alertas_ne)
+dm <- rm_$dados
+checar("Magistrados: CPFs com o alerta \"cargos distintos ativos\" (com e sem zero à esquerda)",
+       setequal(rm_$cpfs_conflito, c("00979548535", "11111111111", "22222222222", "33333333333", "55555555555")))
+checar("Magistrados: alerta de outro tipo não entra", !("66666666666" %in% rm_$cpfs_conflito))
+checar("Magistrados: duas linhas só para quem tem registro em aberto de outro cargo (JAIR)",
+       nrow(dm) == 2 && identical(dm$Nome, c("JAIR", "JAIR")))
+checar("Magistrados: 1ª linha é o registro em aberto de outro cargo (cargo 2, 2018), não o encerrado (situação 10)",
+       dm$Cargo[1] == "2" && dm$`Data de início da situação`[1] == "17/10/2018" && dm$`Situação profissional atual`[1] == "8")
+checar("Magistrados: 1ª linha recebe Data de saída = início do envio (serial do Excel em dd/mm/aaaa)",
+       dm$`Data de saída da situação`[1] == format(as.Date(46279, origin = "1899-12-30"), "%d/%m/%Y"))
+checar("Magistrados: 2ª linha é o envio sem alteração (datas em dd/mm/aaaa)",
+       dm$CPF[2] == "979548535" && dm$Cargo[2] == "1" && dm$`Órgão de lotação do magistrado(a)`[2] == "8404")
+checar("Magistrados: novo envio tem as colunas do envio (sem Status da base)", identical(names(dm), names(mag_envio_ne)))
+checar("Magistrados: mesmo cargo, registro encerrado ou já com saída não geram linhas (ANA, BRUNO, CARLA)",
+       setequal(rm_$sem_base, c("11111111111", "22222222222", "33333333333")))
+checar("Magistrados: CPF com alerta fora do envio é informado", identical(rm_$sem_envio, "55555555555"))
+checar("Magistrados: alerta de conflito de duplicidade também conta",
+       identical(cpfs_com_duplicidade_magistrados(data.frame(CPF = "1", `Conflito: Duplicidade no próprio Tribunal` = "x",
+                                                            check.names = FALSE)), "00000000001"))
+
+checar("Magistrados: arquivo sem Status (gerado pelo órgão) é reconhecido como envio",
+       identical(identificar_tipo_arquivo_magistrados(mag_envio_ne, "Magistrados_i.xlsx"), "envio") &&
+           identical(identificar_tipo_arquivo_magistrados(mag_base_ne, "Magistrados_i.xlsx"), "base"))
+
+# Serventias: linhas do envio das serventias com alerta.
+srv_envio_ne <- data.frame(`Código Serventia` = c("18160", "18169", "18130"), CEP = c("49580970", "49650000", "49690000"),
+                           `Data Adesão` = c("44533", "03/12/2021", ""), `Entrância` = c("2", "1", "2"), check.names = FALSE)
+srv_alertas_ne <- data.frame(`Código Serventia` = c("18160", "018130", "99999", "18169"),
+                             `Alerta: Geolocalização` = c("Fora do município", "x", "y", NA), check.names = FALSE)
+rs_ <- gerar_novo_envio_serventias(srv_envio_ne, srv_alertas_ne)
+checar("Serventias: novo envio só com as serventias que têm alerta (código com/sem zero à esquerda)",
+       identical(rs_$dados$`Código Serventia`, c("18160", "18130")))
+checar("Serventias: colunas do envio, data serial em dd/mm/aaaa",
+       identical(names(rs_$dados), names(srv_envio_ne)) && rs_$dados$`Data Adesão`[1] == "03/12/2021")
+checar("Serventias: código com alerta fora do envio é informado", identical(rs_$sem_envio, "99999"))
+checar("Serventias: arquivo sem Status (gerado pelo órgão) é reconhecido como envio",
+       identical(identificar_tipo_arquivo_serventias(srv_envio_ne, "serventias_i.xlsx"), "envio"))
+
+# Pelo módulo: tabelas do envio e botão.
+unlink(file.path(dir_teste, "data", "TJSE", "magistrados"), recursive = TRUE)
+unlink(file.path(dir_teste, "data", "TJSE", "serventias"), recursive = TRUE)
+dir.create(pasta_magistrados("TJSE"), recursive = TRUE, showWarnings = FALSE)
+dir.create(pasta_serventias("TJSE"), recursive = TRUE, showWarnings = FALSE)
+readr::write_excel_csv2(mag_base_ne, file.path(pasta_magistrados("TJSE"), "magistrados.csv"), na = "")
+readr::write_excel_csv2(mag_envio_ne, file.path(pasta_magistrados("TJSE"), "magistrados_envio.csv"), na = "")
+readr::write_excel_csv2(mag_alertas_ne, file.path(pasta_magistrados("TJSE"), "alertas_magistrados.csv"), na = "")
+readr::write_excel_csv2(
+    data.frame(`Código Serventia` = c("8404", "32"), `Nome Serventia` = c("1ª VARA CÍVEL", "TRIBUNAL"), CEP = "49000000",
+               Status = "Ativo", check.names = FALSE),
+    file.path(pasta_serventias("TJSE"), "serventias.csv"), na = "")
+readr::write_excel_csv2(srv_envio_ne, file.path(pasta_serventias("TJSE"), "serventias_envio.csv"), na = "")
+readr::write_excel_csv2(srv_alertas_ne, file.path(pasta_serventias("TJSE"), "alertas_serventias.csv"), na = "")
+limpar_cache_arquivos()
+
+testServer(mod_alertas_magistrados_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "envio", envio_status = "Todos", envio_cargo = "Todos", envio_situacao = "Todos",
+                      envio_orgao = "Todos", envio_cpf = "", envio_nome = "", envio_detalhe = "")
+    checar("Magistrados (módulo): novo envio montado dos arquivos da empresa", nrow(novo_envio()$dados) == 2)
+    h <- paste(as.character(output$novo_envio_ui$html), collapse = "")
+    checar("Magistrados (módulo): botão Gerar Novo Envio ativo", grepl("novo_envio_download", h, fixed = TRUE))
+    d <- ler_arquivo_dados(output$novo_envio_download, "csv")
+    checar("Magistrados (módulo): download traz as duas linhas", nrow(d) == 2 && d$Cargo[1] == "2")
+    checar("Magistrados (módulo): tabela do Envio mostra o órgão com o nome da serventia e o cargo por extenso",
+           any(envio_exibicao()$`Órgão de lotação do magistrado(a)` == "8404 - 1ª VARA CÍVEL") &&
+               any(grepl("Titular", envio_exibicao()$Cargo)))
+    h_csv <- paste(as.character(output$envio_csv_ui$html), collapse = "")
+    checar("Magistrados (módulo): aba CSV do Envio tem o Gerar Novo Envio, a da Base não",
+           grepl("novo_envio_ui", h_csv, fixed = TRUE) &&
+               !grepl("novo_envio_ui", paste(as.character(output$base_csv_ui$html), collapse = ""), fixed = TRUE))
+})
+
+testServer(mod_alertas_serventias_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "envio", envio_status = "Todos", envio_unidade = "Todos",
+                      envio_entrancia = "Todos", envio_codigo = "", envio_detalhe = "")
+    checar("Serventias (módulo): novo envio com as serventias com alerta", nrow(novo_envio()$dados) == 2)
+    d <- ler_arquivo_dados(output$novo_envio_download, "csv")
+    checar("Serventias (módulo): download traz as linhas do envio", nrow(d) == 2)
+    checar("Serventias (módulo): aba CSV do Envio tem o Gerar Novo Envio",
+           grepl("novo_envio_ui", paste(as.character(output$envio_csv_ui$html), collapse = ""), fixed = TRUE))
+})
+
+# =====================================================
 
 cat(sprintf("\n%d de %d verificações passaram.\n", total - falhas, total))
 if (falhas > 0) quit(status = 1)
