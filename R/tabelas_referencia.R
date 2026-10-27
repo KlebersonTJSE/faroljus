@@ -39,7 +39,13 @@
 # =====================================================
 
 PASTA_REFERENCIAS <- here::here("referencias")
-PASTA_REFERENCIAS_ENVIADAS <- file.path(PASTA_ALERTAS_BASE, "referencias")
+# Não depende de PASTA_ALERTAS_BASE (definida em mod_pessoal_auxiliar.R):
+# o Shiny carrega sozinho os arquivos de R/ antes do app.R (autoload),
+# quando os módulos ainda não existem.
+PASTA_REFERENCIAS_ENVIADAS <- file.path(
+    if (exists("PASTA_ALERTAS_BASE")) PASTA_ALERTAS_BASE else Sys.getenv("PASTA_ALERTAS", unset = "data"),
+    "referencias"
+)
 
 # Arquivos de referência aceitos (nome fixo de gravação).
 ARQUIVOS_REFERENCIA <- list(

@@ -1532,6 +1532,14 @@ testServer(server, {
     checar("clicar em Tabelas Auxiliares abre a tela", identical(menuSelecionado(), ABA_TABELAS_AUXILIARES))
 })
 
+# O RStudio (runApp) carrega os arquivos de R/ sozinho, antes do app.R e
+# dos módulos: eles não podem depender, ao serem carregados, de objetos
+# definidos nos módulos (ex.: PASTA_ALERTAS_BASE).
+env_autoload <- new.env(parent = baseenv())
+r_autoload <- try(sys.source(here::here("R", "tabelas_referencia.R"), envir = env_autoload), silent = TRUE)
+checar("R/tabelas_referencia.R carrega sozinho (autoload do Shiny, antes dos módulos)",
+       !inherits(r_autoload, "try-error"))
+
 # =====================================================
 
 cat(sprintf("\n%d de %d verificações passaram.\n", total - falhas, total))
