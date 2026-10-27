@@ -130,6 +130,13 @@ TIPOS_ARQUIVO_MAGISTRADOS <- list(
         radical = "magistrados",
         rotulo = "Base de Dados - Magistrados"
     ),
+    # Arquivo que o órgão envia ao MPM (mesmo layout da base). Reconhecido
+    # no upload por ter "envio" no nome do arquivo (como em Pessoal e
+    # Auxiliar).
+    envio = list(
+        radical = "magistrados_envio",
+        rotulo = "Envio - Magistrados"
+    ),
     alertas = list(
         radical = "alertas_magistrados",
         rotulo = "Alertas - Magistrados"
@@ -138,6 +145,7 @@ TIPOS_ARQUIVO_MAGISTRADOS <- list(
 
 ARQUIVO_BASE_MAGISTRADOS <- "magistrados.xlsx"
 ARQUIVO_ALERTAS_MAGISTRADOS <- "alertas_magistrados.csv"
+ARQUIVO_ENVIO_MAGISTRADOS <- "magistrados_envio.xlsx"
 
 # Subpasta de magistrados da empresa (<PASTA_ALERTAS>/<EMPRESA>/magistrados).
 pasta_magistrados <- function(empresa) {
@@ -229,7 +237,7 @@ AGRUPAMENTOS_BASE_MAGISTRADOS <- c(
 #   - sem colunas de alerta                                     -> base
 # =====================================================
 
-identificar_tipo_arquivo_magistrados <- function(df) {
+identificar_tipo_arquivo_magistrados <- function(df, nome_arquivo = NULL) {
     
     if (is.null(df) || ncol(df) == 0) {
         return(NA_character_)
@@ -244,7 +252,16 @@ identificar_tipo_arquivo_magistrados <- function(df) {
     
     tem_alertas <- any(str_starts(names(df), "Alerta") | str_starts(names(df), "Conflito"))
     
-    if (tem_alertas) "alertas" else "base"
+    if (tem_alertas) {
+        return("alertas")
+    }
+    
+    # Sem colunas de alerta: base, ou envio se o nome do arquivo tiver
+    # "envio" (mesma regra de identificar_tipo_arquivo_pessoal()).
+    eh_envio <- !is.null(nome_arquivo) && length(nome_arquivo) == 1 && !is.na(nome_arquivo) &&
+        str_detect(normalizar_nome_arquivo(nome_arquivo), REGEX_NOME_ARQUIVO_ENVIO)
+    
+    if (eh_envio) "envio" else "base"
     
 }
 
@@ -625,6 +642,354 @@ carregar_lotacoes_magistrados_empresa <- function(empresa) {
 }
 
 # =====================================================
+# ABA DE CADASTRO (Base de Dados / Envio - Magistrados)
+# -----------------------------------------------------
+# Mesma estrutura de Pessoal e Auxiliar (ui_aba_cadastro_pessoal(), em
+# mod_alertas.R): as duas abas têm os mesmos filtros (Status, CPF, Nome,
+# Cargo, Situação, Órgão de lotação e Detalhe), gráfico e CSV. `p` é o
+# prefixo dos ids ("base" ou "envio": base_status, envio_status...). O
+# lado do servidor é servidor_aba_cadastro_magistrados().
+# =====================================================
+
+ui_aba_cadastro_magistrados <- function(ns, p, titulo, icone) {
+    
+    id <- function(x) ns(paste0(p, "_", x))
+    
+    tabPanel(
+        title = tagList(icon(icone, class = "me-1"), titulo),
+        value = p,
+        
+        div(
+            class = "al-card",
+            # Bloqueado (handler JS "bloquear-filtros", em app.R) enquanto
+            # não houver arquivo.
+            id = id("filtros"),
+            
+            div(class = "al-card-titulo", "Filtros"),
+            
+            div(
+                class = "al-filtros-aviso",
+                icon("lock", class = "me-2"),
+                "Filtros indisponíveis: não há arquivo para exibir. Envie-o pelo botão \"Gerenciar Arquivos\"."
+            ),
+            
+            fluidRow(
+                column(
+                    2,
+                    # Começa em "Ativo"; se o arquivo não tiver coluna
+                    # Status, volta para "Todos".
+                    selectInput(
+                        id("status"), "Status",
+                        choices = c("Todos", "Ativo"),
+                        selected = "Ativo",
+                        width = "100%"
+                    )
+                ),
+                column(3, textInput(id("cpf"), "CPF", width = "100%")),
+                column(7, textInput(id("nome"), "Nome", width = "100%"))
+            ),
+            
+            fluidRow(
+                column(4, selectInput(id("cargo"), "Cargo", choices = c("Todos"), width = "100%")),
+                column(
+                    4,
+                    selectInput(id("situacao"), "Situação profissional atual", choices = c("Todos"), width = "100%")
+                ),
+                column(4, selectInput(id("orgao"), "Órgão de lotação", choices = c("Todos"), width = "100%"))
+            ),
+            
+            fluidRow(
+                column(
+                    12,
+                    textInput(
+                        id("detalhe"), "Detalhe",
+                        placeholder = "Procura o texto digitado em todas as colunas da tabela",
+                        width = "100%"
+                    )
+                )
+            ),
+            
+            fluidRow(
+                column(
+                    12,
+                    actionButton(
+                        id("limpar_filtros"),
+                        tagList(icon("filter-circle-xmark", class = "me-2"), "Limpar Filtros"),
+                        class = "btn btn-outline-secondary btn-sm"
+                    )
+                )
+            )
+        ),
+        
+        div(
+            class = "al-conteudo",
+            
+            tabsetPanel(
+                tabPanel(
+                    tagList(icon("table", class = "me-1"), "Tabela"),
+                    DTOutput(id("tabela"))
+                ),
+                tabPanel(
+                    tagList(icon("chart-column", class = "me-1"), "Gráfico"),
+                    
+                    fluidRow(
+                        class = "mt-3",
+                        id = id("grafico_controles"),
+                        column(
+                            4,
+                            selectInput(
+                                id("grafico_agrupar"), "Agrupar por",
+                                choices = names(AGRUPAMENTOS_BASE_MAGISTRADOS),
+                                selected = "Cargo",
+                                width = "100%"
+                            )
+                        ),
+                        column(
+                            4,
+                            selectInput(
+                                id("grafico_qtd"), "Exibir",
+                                choices = c(
+                                    "Os 20 maiores grupos" = "20",
+                                    "Os 50 maiores grupos" = "50",
+                                    "Todos os grupos" = "0"
+                                ),
+                                selected = "20",
+                                width = "100%"
+                            )
+                        )
+                    ),
+                    
+                    girafeOutput(id("grafico"))
+                ),
+                tabPanel(
+                    tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
+                    uiOutput(id("csv_ui"))
+                )
+            )
+        )
+    )
+    
+}
+
+# Chamado dentro de mod_alertas_magistrados_server(). `dados` é o
+# reactiveVal com o arquivo lido; `p`, o prefixo dos ids da UI. Devolve a
+# versão de exibição, a filtrada, a função que atualiza os combos e a
+# mensagem de "sem arquivo" (usada na janela de aviso).
+servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
+                                              msg_sem_dados, nome_csv) {
+    
+    ns <- session$ns
+    id <- function(x) paste0(p, "_", x)
+    valor <- function(x) input[[id(x)]]
+    
+    MSG_SEM_RESULTADO <- "Nenhum magistrado encontrado com os filtros aplicados."
+    
+    # Mesmas colunas e ordem do arquivo; Cargo e Situação por extenso.
+    exibicao <- reactive({
+        traduzir_codigos_magistrados(dados())
+    })
+    
+    # Quando o arquivo passa de "sem dados" para "com dados" (primeiro
+    # envio, troca de empresa), o Status volta ao padrão "Ativo".
+    status_anterior <- character(0)
+    
+    atualizar_combos <- function() {
+        
+        df <- exibicao()
+        
+        status <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_STATUS_MAGISTRADO))
+        cargos <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_CARGO))
+        situacoes <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_SITUACAO))
+        orgaos <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_ORGAO_MAGISTRADO))
+        
+        status_atual <- if (length(status_anterior) == 0) "Ativo" else valor("status")
+        status_anterior <<- status
+        
+        updateSelectInput(session, id("status"), choices = c("Todos", status),
+                          selected = selecao_valida(status_atual, status, padrao = "Ativo"))
+        updateSelectInput(session, id("cargo"), choices = c("Todos", cargos),
+                          selected = selecao_valida(valor("cargo"), cargos))
+        updateSelectInput(session, id("situacao"), choices = c("Todos", situacoes),
+                          selected = selecao_valida(valor("situacao"), situacoes))
+        updateSelectInput(session, id("orgao"), choices = c("Todos", orgaos),
+                          selected = selecao_valida(valor("orgao"), orgaos))
+        
+    }
+    
+    # Status volta ao padrão "Ativo" (não para "Todos").
+    observeEvent(valor("limpar_filtros"), {
+        status <- opcoes_combo(valores_coluna_regex(exibicao(), REGEX_COL_STATUS_MAGISTRADO))
+        updateSelectInput(session, id("status"), selected = selecao_valida("Ativo", status))
+        updateTextInput(session, id("cpf"), value = "")
+        updateTextInput(session, id("nome"), value = "")
+        updateSelectInput(session, id("cargo"), selected = "Todos")
+        updateSelectInput(session, id("situacao"), selected = "Todos")
+        updateSelectInput(session, id("orgao"), selected = "Todos")
+        updateTextInput(session, id("detalhe"), value = "")
+    }, ignoreInit = TRUE)
+    
+    busca <- reactive({
+        texto_busca_linhas(exibicao())
+    })
+    
+    # Espera o usuário parar de digitar (400 ms) antes de filtrar.
+    cpf_d <- debounce(reactive(valor("cpf")), 400)
+    nome_d <- debounce(reactive(valor("nome")), 400)
+    detalhe_d <- debounce(reactive(valor("detalhe")), 400)
+    
+    filtrados <- reactive({
+        df <- exibicao()
+        
+        if (nrow(df) == 0) {
+            return(df)
+        }
+        
+        manter <- rep(TRUE, nrow(df))
+        
+        filtrar_combo <- function(sel, regex) {
+            if (!is.null(sel) && sel != "Todos") {
+                v <- valores_coluna_regex(df, regex)
+                if (!is.null(v)) manter <<- manter & v == sel
+            }
+        }
+        
+        filtrar_combo(valor("status"), REGEX_COL_STATUS_MAGISTRADO)
+        filtrar_combo(valor("cargo"), REGEX_COL_CARGO)
+        filtrar_combo(valor("situacao"), REGEX_COL_SITUACAO)
+        filtrar_combo(valor("orgao"), REGEX_COL_ORGAO_MAGISTRADO)
+        
+        cpf <- str_trim(cpf_d() %||% "")
+        col_cpf <- coluna_por_regex(df, REGEX_COL_CPF)
+        if (cpf != "" && !is.null(col_cpf)) {
+            manter <- manter & contem_cpf(df[[col_cpf]], cpf)
+        }
+        
+        nome <- str_trim(nome_d() %||% "")
+        col_nome <- coluna_por_regex(df, REGEX_COL_NOME)
+        if (nome != "" && !is.null(col_nome)) {
+            manter <- manter & contem_texto(df[[col_nome]], nome)
+        }
+        
+        detalhe <- str_trim(detalhe_d() %||% "")
+        if (detalhe != "") {
+            manter <- manter & str_detect(busca(), fixed(normalizar_texto_busca(detalhe)))
+        }
+        
+        df[manter, , drop = FALSE]
+    })
+    
+    output[[id("tabela")]] <- renderDT({
+        # Sem arquivo: a área fica vazia — o aviso aparece numa janela ao
+        # selecionar a aba (ver mostrar_alerta_sem_arquivo()).
+        shiny::validate(need(nrow(dados()) > 0, FALSE))
+        
+        df <- filtrados()
+        
+        shiny::validate(need(nrow(df) > 0, MSG_SEM_RESULTADO))
+        
+        tabela_dt(df)
+    })
+    
+    # ---- Gráfico (agrupamento selecionável) ----
+    
+    resumo <- reactive({
+        if (nrow(dados()) == 0) {
+            return(list(resumo = NULL, mensagem = FALSE))
+        }
+        
+        df <- filtrados()
+        
+        if (nrow(df) == 0) {
+            return(list(resumo = NULL, mensagem = MSG_SEM_RESULTADO))
+        }
+        
+        agrupar <- valor("grafico_agrupar") %||% "Cargo"
+        regex <- AGRUPAMENTOS_BASE_MAGISTRADOS[[agrupar]]
+        grupos <- valores_coluna_regex(df, regex)
+        
+        if (is.null(grupos)) {
+            return(list(
+                resumo = NULL,
+                mensagem = sprintf("Coluna \"%s\" não encontrada no arquivo carregado.", agrupar)
+            ))
+        }
+        
+        col_cpf <- coluna_por_regex(df, REGEX_COL_CPF)
+        cpfs <- if (is.null(col_cpf)) rep(NA_character_, nrow(df)) else df[[col_cpf]]
+        
+        r <- tibble(Grupo = grupos, CPF = cpfs) %>%
+            group_by(Grupo) %>%
+            summarise(
+                Quantidade = n(),
+                Pessoas = n_distinct(CPF[!is.na(CPF) & CPF != ""]),
+                .groups = "drop"
+            ) %>%
+            arrange(desc(Quantidade), Grupo)
+        
+        list(resumo = r, mensagem = NULL, agrupar = agrupar)
+    })
+    
+    output[[id("grafico")]] <- renderGirafe({
+        r <- resumo()
+        
+        shiny::validate(need(is.null(r$mensagem), r$mensagem))
+        
+        total <- nrow(r$resumo)
+        limite <- suppressWarnings(as.integer(valor("grafico_qtd")))
+        
+        exibido <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
+        
+        exibido <- exibido %>%
+            mutate(
+                dica = sprintf(
+                    "<b>%s</b><br/>%s registro(s)<br/>%s magistrado(s) (CPF distintos)",
+                    htmltools::htmlEscape(Grupo),
+                    format(Quantidade, big.mark = ".", decimal.mark = ","),
+                    format(Pessoas, big.mark = ".", decimal.mark = ",")
+                )
+            )
+        
+        grafico_barras_girafe(
+            exibido,
+            titulo = sprintf("Quantidade de Registros por %s", r$agrupar),
+            subtitulo = sprintf("Exibindo %d de %d grupo(s)", nrow(exibido), total)
+        )
+    })
+    
+    # ---- Gerar arquivo CSV ----
+    
+    output[[id("csv_ui")]] <- renderUI({
+        ui_csv_dados(ns, id("download_csv"), nrow(filtrados()) > 0)
+    })
+    
+    output[[id("download_csv")]] <- downloadHandler(
+        
+        filename = function() {
+            paste0(nome_csv, "-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
+        },
+        
+        content = function(file) {
+            inicio <- Sys.time()
+            
+            gravar_csv_tabela(filtrados(), file, valor("tabela_rows_all"))
+            
+            showNotification(
+                sprintf("Arquivo CSV gerado em %.2fs.", tempo_decorrido(inicio)),
+                type = "message"
+            )
+        }
+    )
+    
+    list(
+        exibicao = exibicao,
+        filtrados = filtrados,
+        atualizar_combos = atualizar_combos,
+        msg_sem_dados = msg_sem_dados
+    )
+    
+}
+
+# =====================================================
 # UI
 # =====================================================
 
@@ -822,139 +1187,39 @@ mod_alertas_magistrados_ui <- function(id) {
                     id = ns("secao"),
                     
                     # =============================================
-                    # ABA 1 — BASE DE DADOS - MAGISTRADOS
+                    # ABA 1 — BASE DE DADOS e ABA 2 — ENVIO
+                    # -------------------------------------------------
+                    # Mesma estrutura de Pessoal e Auxiliar: as duas abas
+                    # têm os mesmos filtros, gráfico e CSV (ver
+                    # ui_aba_cadastro_magistrados()).
                     # =============================================
                     
-                    tabPanel(
-                        title = tagList(icon("database", class = "me-1"), "Base de Dados - Magistrados"),
-                        value = "base",
-                        
-                        div(
-                            class = "al-card",
-                            
-                            div(class = "al-card-titulo", "Filtros"),
-                            
-                            fluidRow(
-                                column(
-                                    2,
-                                    # Começa em "Ativo"; se a base não tiver
-                                    # coluna Status, volta para "Todos".
-                                    selectInput(
-                                        ns("base_status"), "Status",
-                                        choices = c("Todos", "Ativo"),
-                                        selected = "Ativo",
-                                        width = "100%"
-                                    )
-                                ),
-                                column(3, textInput(ns("base_cpf"), "CPF", width = "100%")),
-                                column(7, textInput(ns("base_nome"), "Nome", width = "100%"))
-                            ),
-                            
-                            fluidRow(
-                                column(
-                                    4,
-                                    selectInput(ns("base_cargo"), "Cargo", choices = c("Todos"), width = "100%")
-                                ),
-                                column(
-                                    4,
-                                    selectInput(
-                                        ns("base_situacao"), "Situação profissional atual",
-                                        choices = c("Todos"), width = "100%"
-                                    )
-                                ),
-                                column(
-                                    4,
-                                    selectInput(
-                                        ns("base_orgao"), "Órgão de lotação",
-                                        choices = c("Todos"), width = "100%"
-                                    )
-                                )
-                            ),
-                            
-                            fluidRow(
-                                column(
-                                    12,
-                                    textInput(
-                                        ns("base_detalhe"), "Detalhe",
-                                        placeholder = "Procura o texto digitado em todas as colunas da tabela",
-                                        width = "100%"
-                                    )
-                                )
-                            ),
-                            
-                            fluidRow(
-                                column(
-                                    12,
-                                    actionButton(
-                                        ns("base_limpar_filtros"),
-                                        tagList(icon("filter-circle-xmark", class = "me-2"), "Limpar Filtros"),
-                                        class = "btn btn-outline-secondary btn-sm"
-                                    )
-                                )
-                            )
-                        ),
-                        
-                        div(
-                            class = "al-conteudo",
-                            
-                            tabsetPanel(
-                                tabPanel(
-                                    tagList(icon("table", class = "me-1"), "Tabela"),
-                                    DTOutput(ns("base_tabela"))
-                                ),
-                                tabPanel(
-                                    tagList(icon("chart-column", class = "me-1"), "Gráfico"),
-                                    
-                                    fluidRow(
-                                        class = "mt-3",
-                                        column(
-                                            4,
-                                            selectInput(
-                                                ns("base_grafico_agrupar"), "Agrupar por",
-                                                choices = names(AGRUPAMENTOS_BASE_MAGISTRADOS),
-                                                selected = "Cargo",
-                                                width = "100%"
-                                            )
-                                        ),
-                                        column(
-                                            4,
-                                            selectInput(
-                                                ns("base_grafico_qtd"), "Exibir",
-                                                choices = c(
-                                                    "Os 20 maiores grupos" = "20",
-                                                    "Os 50 maiores grupos" = "50",
-                                                    "Todos os grupos" = "0"
-                                                ),
-                                                selected = "20",
-                                                width = "100%"
-                                            )
-                                        )
-                                    ),
-                                    
-                                    girafeOutput(ns("base_grafico"))
-                                ),
-                                tabPanel(
-                                    tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
-                                    uiOutput(ns("base_csv_ui"))
-                                )
-                            )
-                        )
-                    ),
+                    ui_aba_cadastro_magistrados(ns, "base", titulo = "Base de Dados", icone = "database"),
+                    
+                    ui_aba_cadastro_magistrados(ns, "envio", titulo = "Envio", icone = "paper-plane"),
                     
                     # =============================================
-                    # ABA 2 — ALERTAS - MAGISTRADOS
+                    # ABA 3 — ALERTAS - MAGISTRADOS
                     # -------------------------------------------------
                     # "Alerta" e "Conflito" se excluem mutuamente.
                     # =============================================
                     
                     tabPanel(
-                        title = tagList(icon("triangle-exclamation", class = "me-1"), "Alertas - Magistrados"),
+                        title = tagList(icon("triangle-exclamation", class = "me-1"), "Alertas"),
                         value = "alertas",
                         
                         div(
                             class = "al-card",
+                            # Bloqueado (handler JS "bloquear-filtros") sem arquivo.
+                            id = ns("alertas_filtros"),
                             
                             div(class = "al-card-titulo", "Filtros"),
+                            
+                            div(
+                                class = "al-filtros-aviso",
+                                icon("lock", class = "me-2"),
+                                "Filtros indisponíveis: não há arquivo de alertas para exibir. Envie-o pelo botão \"Gerenciar Arquivos\"."
+                            ),
                             
                             fluidRow(
                                 column(4, selectInput(ns("alerta"), "Alerta", choices = c("Todos"), width = "100%")),
@@ -1002,7 +1267,7 @@ mod_alertas_magistrados_ui <- function(id) {
                     ),
                     
                     # =============================================
-                    # ABA 3 — INCONSISTÊNCIAS - MAGISTRADOS
+                    # ABA 4 — INCONSISTÊNCIAS - MAGISTRADOS
                     # -------------------------------------------------
                     # Verificações automáticas sobre a base (ver
                     # verificar_inconsistencias_magistrados()).
@@ -1011,7 +1276,7 @@ mod_alertas_magistrados_ui <- function(id) {
                     tabPanel(
                         title = tagList(
                             icon("clipboard-check", class = "me-1"),
-                            "Inconsistências - Magistrados",
+                            "Inconsistências",
                             mod_inconsistencias_badge_ui(ns("inc"))
                         ),
                         value = "inconsistencias",
@@ -1040,6 +1305,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         
         # Começam vazios: a empresa só é conhecida depois do login.
         dados_base <- reactiveVal(data.frame())   # magistrados.xlsx/.csv
+        dados_envio <- reactiveVal(data.frame())  # magistrados_envio.xlsx/.csv
         nomes_orgaos <- reactiveVal(character(0)) # código -> nome (base de Serventias)
         dados <- reactiveVal(data.frame())        # alertas_magistrados.csv/.xlsx
         
@@ -1051,6 +1317,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         recarregar <- function() {
             pasta <- pasta_magistrados(empresa())
             dados_base(carregar_arquivo_magistrados(mag_arquivo_do_tipo(pasta, "base")))
+            dados_envio(carregar_arquivo_magistrados(mag_arquivo_do_tipo(pasta, "envio")))
             dados(carregar_arquivo_magistrados(mag_arquivo_do_tipo(pasta, "alertas")))
             # Nomes dos órgãos (para achar gabinetes de desembargador).
             # A base de Serventias é de outro módulo: mudanças nela entram
@@ -1079,6 +1346,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             if (!empresa_definida()) {
                 if (!is.null(empresa_carregada())) {
                     dados_base(data.frame())
+                    dados_envio(data.frame())
                     dados(data.frame())
                     nomes_orgaos(character(0))
                     empresa_carregada(NULL)
@@ -1104,9 +1372,33 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         # Cargo, o gráfico por Cargo e a tabela mostram a mesma coisa.
         # =================================================
         
-        base_exibicao <- reactive({
-            traduzir_codigos_magistrados(dados_base())
-        })
+        # Abas Base de Dados e Envio (mesmos filtros, gráfico e CSV) — ver
+        # servidor_aba_cadastro_magistrados().
+        aba_base <- servidor_aba_cadastro_magistrados(
+            input, output, session, "base",
+            dados = dados_base,
+            msg_sem_dados = paste0(
+                "Não existe arquivo de Magistrados (magistrados.xlsx ou magistrados.csv)",
+                " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo."
+            ),
+            nome_csv = "base-magistrados"
+        )
+        
+        aba_envio <- servidor_aba_cadastro_magistrados(
+            input, output, session, "envio",
+            dados = dados_envio,
+            msg_sem_dados = paste0(
+                "Não existe arquivo de envio de Magistrados (magistrados_envio.xlsx ou .csv)",
+                " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo",
+                " (o nome do arquivo precisa conter \"envio\")."
+            ),
+            nome_csv = "envio-magistrados"
+        )
+        
+        base_exibicao <- aba_base$exibicao
+        dados_base_filtrados <- aba_base$filtrados
+        envio_exibicao <- aba_envio$exibicao
+        dados_envio_filtrados <- aba_envio$filtrados
         
         alertas_exibicao <- reactive({
             traduzir_codigos_magistrados(dados())
@@ -1116,46 +1408,9 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         # COMBOS
         # =================================================
         
-        # Quando a base passa de "sem dados" para "com dados" (primeiro
-        # envio, troca de empresa), o Status volta ao padrão "Ativo".
-        status_base_anterior <- character(0)
-        
         atualizar_combos_base <- function() {
-            
-            df <- base_exibicao()
-            
-            status <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_STATUS_MAGISTRADO))
-            cargos <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_CARGO))
-            situacoes <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_SITUACAO))
-            orgaos <- opcoes_combo(valores_coluna_regex(df, REGEX_COL_ORGAO_MAGISTRADO))
-            
-            status_atual <- if (length(status_base_anterior) == 0) "Ativo" else input$base_status
-            status_base_anterior <<- status
-            
-            updateSelectInput(
-                session, "base_status",
-                choices = c("Todos", status),
-                selected = selecao_valida(status_atual, status, padrao = "Ativo")
-            )
-            
-            updateSelectInput(
-                session, "base_cargo",
-                choices = c("Todos", cargos),
-                selected = selecao_valida(input$base_cargo, cargos)
-            )
-            
-            updateSelectInput(
-                session, "base_situacao",
-                choices = c("Todos", situacoes),
-                selected = selecao_valida(input$base_situacao, situacoes)
-            )
-            
-            updateSelectInput(
-                session, "base_orgao",
-                choices = c("Todos", orgaos),
-                selected = selecao_valida(input$base_orgao, orgaos)
-            )
-            
+            aba_base$atualizar_combos()
+            aba_envio$atualizar_combos()
         }
         
         atualizar_combos <- function() {
@@ -1191,7 +1446,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             atualizar_combos()
         }
         
-        observeEvent(list(dados_base(), dados(), ativo()), {
+        observeEvent(list(dados_base(), dados_envio(), dados(), ativo()), {
             req(ativo())
             atualizar_todos_combos()
         }, ignoreInit = FALSE)
@@ -1215,17 +1470,6 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         # ----------------------------------------
         # LIMPAR FILTROS
         # ----------------------------------------
-        
-        observeEvent(input$base_limpar_filtros, {
-            status <- opcoes_combo(valores_coluna_regex(base_exibicao(), REGEX_COL_STATUS_MAGISTRADO))
-            updateSelectInput(session, "base_status", selected = selecao_valida("Ativo", status))
-            updateTextInput(session, "base_cpf", value = "")
-            updateTextInput(session, "base_nome", value = "")
-            updateSelectInput(session, "base_cargo", selected = "Todos")
-            updateSelectInput(session, "base_situacao", selected = "Todos")
-            updateSelectInput(session, "base_orgao", selected = "Todos")
-            updateTextInput(session, "base_detalhe", value = "")
-        })
         
         observeEvent(input$limpar_filtros, {
             updateSelectInput(session, "alerta", selected = "Todos")
@@ -1308,7 +1552,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             
         }
         
-        observeEvent(input$gerenciar_arquivos, {
+        abrir_gerenciar_arquivos <- function() {
             
             if (!empresa_definida()) {
                 showNotification(
@@ -1352,6 +1596,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                     ),
                     
                     linha_arquivo_modal(pasta, "base", "apagar_base"),
+                    linha_arquivo_modal(pasta, "envio", "apagar_envio"),
                     linha_arquivo_modal(pasta, "alertas", "apagar_alertas")
                 ),
                 
@@ -1367,12 +1612,13 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                     
                     div(
                         class = "al-modal-secao-desc",
-                        "Selecione o arquivo de Magistrados e/ou o de Alertas de Magistrados ",
-                        "gerados pelo MPM, em ", tags$b(".xlsx"), " ou ", tags$b(".csv"),
+                        "Selecione o arquivo de Magistrados, o de envio e/ou o de Alertas de ",
+                        "Magistrados gerados pelo MPM, em ", tags$b(".xlsx"), " ou ", tags$b(".csv"),
                         " (um de cada tipo, limite de ", MAX_UPLOAD_MB,
-                        " MB no total). O tipo é identificado pelas colunas: com colunas ",
+                        " MB no total). O tipo é identificado pelas colunas e pelo nome: com colunas ",
                         "\"Alerta: ...\" o arquivo é gravado como ", tags$code("alertas_magistrados"),
-                        "; sem alertas, como ", tags$code("magistrados"),
+                        "; sem alertas e com ", tags$b("envio"), " no nome, como ",
+                        tags$code("magistrados_envio"), "; sem alertas, como ", tags$code("magistrados"),
                         " — sempre com a extensão original. Um arquivo já existente do ",
                         "mesmo tipo é substituído."
                     ),
@@ -1408,11 +1654,112 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                 footer = actionButton(ns("fechar_modal_magistrados"), "Fechar")
             ))
             
-        })
+        }
+        
+        observeEvent(input$gerenciar_arquivos, abrir_gerenciar_arquivos())
         
         observeEvent(input$fechar_modal_magistrados, {
             removeModal()
             session$sendCustomMessage("limpar-modal-backdrop", list())
+        })
+        
+        # =================================================
+        # SEM ARQUIVO: JANELA DE AVISO E FILTROS BLOQUEADOS
+        # -------------------------------------------------
+        # Igual a Pessoal e Auxiliar. Nas abas Base de Dados, Envio e
+        # Alertas, quando não há arquivo:
+        #   - ao selecionar a aba (ou abrir o módulo nela), abre uma janela
+        #     com o aviso e o botão "Gerenciar Arquivos";
+        #   - os filtros (e os controles do gráfico) ficam bloqueados até
+        #     o arquivo ser enviado — handler JS "bloquear-filtros", em
+        #     app.R;
+        #   - a área da tabela e do gráfico fica vazia.
+        # =================================================
+        
+        ABAS_COM_ARQUIVO <- list(
+            base = list(
+                rotulo = "Base de Dados",
+                mensagem = function() aba_base$msg_sem_dados,
+                sem_arquivo = function() nrow(dados_base()) == 0,
+                ids = function() c(ns("base_filtros"), ns("base_grafico_controles"))
+            ),
+            envio = list(
+                rotulo = "Envio",
+                mensagem = function() aba_envio$msg_sem_dados,
+                sem_arquivo = function() nrow(dados_envio()) == 0,
+                ids = function() c(ns("envio_filtros"), ns("envio_grafico_controles"))
+            ),
+            alertas = list(
+                rotulo = "Alertas",
+                mensagem = function() MSG_SEM_ARQUIVOS,
+                sem_arquivo = function() nrow(dados()) == 0,
+                ids = function() ns("alertas_filtros")
+            )
+        )
+        
+        # Última janela de aviso aberta (aba) — usado nos testes.
+        alerta_sem_arquivo_aberto <- reactiveVal(NULL)
+        
+        mostrar_alerta_sem_arquivo <- function(aba) {
+            
+            cfg <- ABAS_COM_ARQUIVO[[aba]]
+            alerta_sem_arquivo_aberto(aba)
+            
+            showModal(modalDialog(
+                div(
+                    class = "al-sem-arquivo",
+                    role = "alert",
+                    div(class = "al-sem-arquivo-icone", icon("folder-open")),
+                    div(class = "al-sem-arquivo-titulo", sprintf("%s: nenhum arquivo para exibir", cfg$rotulo)),
+                    div(class = "al-sem-arquivo-texto", cfg$mensagem()),
+                    div(
+                        class = "al-sem-arquivo-nota",
+                        "Os filtros desta aba ficam indisponíveis até o arquivo ser enviado."
+                    )
+                ),
+                title = NULL,
+                size = "m",
+                easyClose = TRUE,
+                footer = tagList(
+                    modalButton("Fechar"),
+                    actionButton(
+                        ns("sem_arquivo_gerenciar"),
+                        tagList(icon("folder-open", class = "me-2"), "Gerenciar Arquivos"),
+                        class = "btn btn-primary"
+                    )
+                )
+            ))
+            
+        }
+        
+        # Ao selecionar Base de Dados, Envio ou Alertas — ou ao abrir o
+        # módulo numa delas —, sem arquivo: abre a janela de aviso.
+        observeEvent(list(input$secao, ativo()), {
+            req(isTRUE(ativo()), empresa_definida())
+            aba <- input$secao %||% "base"
+            cfg <- ABAS_COM_ARQUIVO[[aba]]
+            if (!is.null(cfg) && cfg$sem_arquivo()) {
+                mostrar_alerta_sem_arquivo(aba)
+            }
+        }, ignoreInit = FALSE)
+        
+        observeEvent(input$sem_arquivo_gerenciar, abrir_gerenciar_arquivos(), ignoreInit = TRUE)
+        
+        # Filtros bloqueados enquanto não houver arquivo (reaplicado quando
+        # os dados mudam e quando o módulo é aberto).
+        filtros_bloqueados <- reactive({
+            vapply(ABAS_COM_ARQUIVO, function(cfg) cfg$sem_arquivo(), logical(1))
+        })
+        
+        observe({
+            bloq <- filtros_bloqueados()
+            ativo()
+            for (aba in names(ABAS_COM_ARQUIVO)) {
+                session$sendCustomMessage(
+                    "bloquear-filtros",
+                    list(ids = as.list(ABAS_COM_ARQUIVO[[aba]]$ids()), bloqueado = isTRUE(bloq[[aba]]))
+                )
+            }
         })
         
         # ----------------------------------------
@@ -1450,6 +1797,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         }
         
         observeEvent(input$apagar_base, pedir_confirmacao_apagar("base"))
+        observeEvent(input$apagar_envio, pedir_confirmacao_apagar("envio"))
         observeEvent(input$apagar_alertas, pedir_confirmacao_apagar("alertas"))
         
         observeEvent(input$confirmar_apagar, {
@@ -1581,7 +1929,8 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
                         return(NA_character_)
                     }
                     identificar_tipo_arquivo_magistrados(
-                        ler_arquivo_magistrados(up$datapath[i], extensoes[i], up$name[i], n_max = 5)
+                        ler_arquivo_magistrados(up$datapath[i], extensoes[i], up$name[i], n_max = 5),
+                        nome_arquivo = up$name[i]
                     )
                 },
                 character(1)
@@ -1608,7 +1957,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
             
             if (any(duplicated(tipos[validos]))) {
                 showNotification(
-                    "Foram selecionados dois arquivos do mesmo tipo. Envie no máximo um arquivo de Magistrados e um de Alertas de Magistrados.",
+                    "Foram selecionados dois arquivos do mesmo tipo. Envie no máximo um arquivo de cada tipo (base, envio e alertas de Magistrados).",
                     type = "error",
                     duration = 12
                 )
@@ -1664,186 +2013,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         })
         
         # =================================================
-        # ABA 1 — BASE DE DADOS - MAGISTRADOS
-        # =================================================
-        
-        MSG_SEM_BASE <- paste0(
-            "Não existe arquivo de Magistrados (magistrados.xlsx ou magistrados.csv)",
-            " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo."
-        )
-        
-        MSG_BASE_SEM_RESULTADO <- "Nenhum magistrado encontrado com os filtros aplicados."
-        
-        busca_base <- reactive({
-            texto_busca_linhas(base_exibicao())
-        })
-        
-        base_cpf_d <- debounce(reactive(input$base_cpf), 400)
-        base_nome_d <- debounce(reactive(input$base_nome), 400)
-        base_detalhe_d <- debounce(reactive(input$base_detalhe), 400)
-        
-        dados_base_filtrados <- reactive({
-            df <- base_exibicao()
-            
-            if (nrow(df) == 0) {
-                return(df)
-            }
-            
-            manter <- rep(TRUE, nrow(df))
-            
-            filtrar_combo <- function(valor, regex) {
-                if (!is.null(valor) && valor != "Todos") {
-                    v <- valores_coluna_regex(df, regex)
-                    if (!is.null(v)) manter <<- manter & v == valor
-                }
-            }
-            
-            filtrar_texto <- function(valor, regex) {
-                valor <- str_trim(valor %||% "")
-                col <- coluna_por_regex(df, regex)
-                if (valor != "" && !is.null(col)) {
-                    manter <<- manter & str_detect(
-                        normalizar_texto_busca(coalesce(df[[col]], "")),
-                        fixed(normalizar_texto_busca(valor))
-                    )
-                }
-            }
-            
-            filtrar_combo(input$base_status, REGEX_COL_STATUS_MAGISTRADO)
-            filtrar_combo(input$base_cargo, REGEX_COL_CARGO)
-            filtrar_combo(input$base_situacao, REGEX_COL_SITUACAO)
-            filtrar_combo(input$base_orgao, REGEX_COL_ORGAO_MAGISTRADO)
-            filtrar_texto(base_cpf_d(), REGEX_COL_CPF)
-            filtrar_texto(base_nome_d(), REGEX_COL_NOME)
-            
-            detalhe <- str_trim(base_detalhe_d() %||% "")
-            if (detalhe != "") {
-                manter <- manter & str_detect(busca_base(), fixed(normalizar_texto_busca(detalhe)))
-            }
-            
-            df[manter, , drop = FALSE]
-        })
-        
-        output$base_tabela <- renderDT({
-            shiny::validate(need(nrow(dados_base()) > 0, MSG_SEM_BASE))
-            
-            df <- dados_base_filtrados()
-            
-            shiny::validate(need(nrow(df) > 0, MSG_BASE_SEM_RESULTADO))
-            
-            datatable(
-                df,
-                filter = "top",
-                rownames = FALSE,
-                width = "100%",
-                options = list(
-                    pageLength = 20,
-                    scrollX = TRUE,
-                    autoWidth = TRUE,
-                    width = "100%"
-                )
-            )
-        })
-        
-        # ---- Gráfico (agrupamento selecionável) ----
-        
-        resumo_base <- reactive({
-            if (nrow(dados_base()) == 0) {
-                return(list(resumo = NULL, mensagem = MSG_SEM_BASE))
-            }
-            
-            df <- dados_base_filtrados()
-            
-            if (nrow(df) == 0) {
-                return(list(resumo = NULL, mensagem = MSG_BASE_SEM_RESULTADO))
-            }
-            
-            agrupar <- input$base_grafico_agrupar %||% "Cargo"
-            regex <- AGRUPAMENTOS_BASE_MAGISTRADOS[[agrupar]]
-            grupos <- valores_coluna_regex(df, regex)
-            
-            if (is.null(grupos)) {
-                return(list(
-                    resumo = NULL,
-                    mensagem = sprintf("Coluna \"%s\" não encontrada na base carregada.", agrupar)
-                ))
-            }
-            
-            col_cpf <- coluna_por_regex(df, REGEX_COL_CPF)
-            cpfs <- if (is.null(col_cpf)) rep(NA_character_, nrow(df)) else df[[col_cpf]]
-            
-            resumo <- tibble(Grupo = grupos, CPF = cpfs) %>%
-                group_by(Grupo) %>%
-                summarise(
-                    Quantidade = n(),
-                    Pessoas = n_distinct(CPF[!is.na(CPF) & CPF != ""]),
-                    .groups = "drop"
-                ) %>%
-                arrange(desc(Quantidade), Grupo)
-            
-            list(resumo = resumo, mensagem = NULL, agrupar = agrupar)
-        })
-        
-        output$base_grafico <- renderGirafe({
-            r <- resumo_base()
-            
-            shiny::validate(need(is.null(r$mensagem), r$mensagem))
-            
-            total <- nrow(r$resumo)
-            limite <- suppressWarnings(as.integer(input$base_grafico_qtd))
-            
-            resumo <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
-            
-            resumo <- resumo %>%
-                mutate(
-                    dica = sprintf(
-                        "<b>%s</b><br/>%s registro(s)<br/>%s magistrado(s) (CPF distintos)",
-                        htmltools::htmlEscape(Grupo),
-                        format(Quantidade, big.mark = ".", decimal.mark = ","),
-                        format(Pessoas, big.mark = ".", decimal.mark = ",")
-                    )
-                )
-            
-            grafico_barras_girafe(
-                resumo,
-                titulo = sprintf("Quantidade de Registros por %s", r$agrupar),
-                subtitulo = sprintf("Exibindo %d de %d grupo(s)", nrow(resumo), total)
-            )
-        })
-        
-        # ---- Gerar arquivo CSV ----
-        
-        output$base_csv_ui <- renderUI({
-            ui_csv_dados(ns, "base_download_csv", nrow(dados_base_filtrados()) > 0)
-        })
-        
-        output$base_download_csv <- downloadHandler(
-            
-            filename = function() {
-                paste0("base-magistrados-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
-            },
-            
-            content = function(file) {
-                inicio <- Sys.time()
-                
-                df <- dados_base_filtrados()
-                
-                linhas_visiveis <- input$base_tabela_rows_all
-                if (!is.null(linhas_visiveis)) {
-                    df <- df[linhas_visiveis, , drop = FALSE]
-                }
-                
-                readr::write_excel_csv2(df, file, na = "")
-                
-                showNotification(
-                    sprintf("Arquivo CSV gerado em %.2fs.", tempo_decorrido(inicio)),
-                    type = "message"
-                )
-            }
-        )
-        
-        # =================================================
-        # ABA 2 — ALERTAS - MAGISTRADOS
+        # ABA 3 — ALERTAS - MAGISTRADOS
         # =================================================
         
         MSG_SEM_ARQUIVOS <- paste0(
@@ -1852,6 +2022,8 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         )
         
         MSG_ALERTAS_SEM_RESULTADO <- "Nenhum registro encontrado com os filtros aplicados."
+        
+        MSG_SEM_BASE <- aba_base$msg_sem_dados
         
         # Espera o usuário parar de digitar (400 ms) antes de filtrar.
         cpf_d <- debounce(reactive(input$cpf), 400)
@@ -1902,7 +2074,9 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         })
         
         output$tabela <- renderDT({
-            shiny::validate(need(nrow(dados()) > 0, MSG_SEM_ARQUIVOS))
+            # Sem arquivo: a área fica vazia — o aviso aparece numa janela
+            # ao selecionar a aba (ver mostrar_alerta_sem_arquivo()).
+            shiny::validate(need(nrow(dados()) > 0, FALSE))
             
             df <- tabela_exibicao()
             
@@ -1926,7 +2100,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         
         resumo_tipos <- reactive({
             if (nrow(dados()) == 0) {
-                return(list(resumo = NULL, mensagem = MSG_SEM_ARQUIVOS))
+                return(list(resumo = NULL, mensagem = FALSE))
             }
             
             df <- dados_filtrados()
@@ -1964,7 +2138,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         
         resumo_cargos <- reactive({
             if (nrow(dados()) == 0) {
-                return(list(resumo = NULL, mensagem = MSG_SEM_ARQUIVOS))
+                return(list(resumo = NULL, mensagem = FALSE))
             }
             
             df <- dados_filtrados()
@@ -2078,7 +2252,7 @@ mod_alertas_magistrados_server <- function(id, ativo = reactive(TRUE), empresa =
         )
         
         # =================================================
-        # ABA 3 — INCONSISTÊNCIAS - MAGISTRADOS
+        # ABA 4 — INCONSISTÊNCIAS - MAGISTRADOS
         # -------------------------------------------------
         # Calculada sobre dados_base() (códigos originais). A tabela
         # mostra Cargo e Situação por extenso (mesma tradução das outras

@@ -120,8 +120,8 @@ FarolJus/
 │   └── tabelas_auxiliares.R  # códigos do MPM no SQLite (Cargo/Situação)
 ├── modules/
 │   ├── mod_alertas.R      # Pessoal e Auxiliar (base, envio, alertas, inconsistências)
-│   ├── mod_alertas_serventias.R  # Serventias
-│   ├── mod_alertas_magistrados.R # Magistrados
+│   ├── mod_alertas_serventias.R  # Serventias (base, envio, alertas, inconsistências)
+│   ├── mod_alertas_magistrados.R # Magistrados (base, envio, alertas, inconsistências)
 │   ├── mod_inconsistencias.R     # aba de inconsistências (comum aos módulos)
 │   ├── mod_painel.R       # Painel (indicadores de Magistrados e Servidores)
 │   ├── mod_matricula.R    # matrícula por nome (consulta ao IRIS)
@@ -133,8 +133,8 @@ FarolJus/
 │   └── <EMPRESA>/         # não versionados
 │       ├── pessoal_auxiliar/   # base (pessoal_auxiliar.xlsx/.csv) e envio
 │       ├── alertas_csv/        # alertas de Pessoal e Auxiliar do MPM
-│       ├── serventias/
-│       └── magistrados/
+│       ├── serventias/     # serventias, serventias_envio e alertas_serventias (.xlsx/.csv)
+│       └── magistrados/    # magistrados, magistrados_envio e alertas_magistrados (.xlsx/.csv)
 ├── img/
 ├── README.md
 ├── LICENSE

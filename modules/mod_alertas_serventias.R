@@ -120,6 +120,13 @@ TIPOS_ARQUIVO_SERVENTIAS <- list(
         radical = "serventias",
         rotulo = "Base de Dados - Serventias"
     ),
+    # Arquivo que o órgão envia ao MPM (mesmo layout da base). Reconhecido
+    # no upload por ter "envio" no nome do arquivo (como em Pessoal e
+    # Auxiliar).
+    envio = list(
+        radical = "serventias_envio",
+        rotulo = "Envio - Serventias"
+    ),
     alertas = list(
         radical = "alertas_serventias",
         rotulo = "Alertas - Serventias"
@@ -129,6 +136,7 @@ TIPOS_ARQUIVO_SERVENTIAS <- list(
 # Nomes "principais" de cada tipo, usados nas mensagens.
 ARQUIVO_BASE_SERVENTIAS <- "serventias.xlsx"
 ARQUIVO_ALERTAS_SERVENTIAS <- "alertas_serventias.csv"
+ARQUIVO_ENVIO_SERVENTIAS <- "serventias_envio.xlsx"
 
 # Subpasta de serventias da empresa (<PASTA_ALERTAS>/<EMPRESA>/serventias).
 pasta_serventias <- function(empresa) {
@@ -222,7 +230,7 @@ ROTULO_SERV_VAZIO <- ROTULO_VALOR_VAZIO
 # no lugar dos alertas) por engano.
 # =====================================================
 
-identificar_tipo_arquivo_serventias <- function(df) {
+identificar_tipo_arquivo_serventias <- function(df, nome_arquivo = NULL) {
     
     if (is.null(df) || ncol(df) == 0) {
         return(NA_character_)
@@ -239,12 +247,19 @@ identificar_tipo_arquivo_serventias <- function(df) {
     )
     
     if (tem_alertas) {
-        "alertas"
-    } else if (!is.null(coluna_serventia(df, REGEX_COL_CEP))) {
-        "base"
-    } else {
-        NA_character_
+        return("alertas")
     }
+    
+    if (is.null(coluna_serventia(df, REGEX_COL_CEP))) {
+        return(NA_character_)
+    }
+    
+    # Sem colunas de alerta, com CEP: base, ou envio se o nome do arquivo
+    # tiver "envio" (mesma regra de identificar_tipo_arquivo_pessoal()).
+    eh_envio <- !is.null(nome_arquivo) && length(nome_arquivo) == 1 && !is.na(nome_arquivo) &&
+        str_detect(normalizar_nome_arquivo(nome_arquivo), REGEX_NOME_ARQUIVO_ENVIO)
+    
+    if (eh_envio) "envio" else "base"
     
 }
 
@@ -579,6 +594,350 @@ verificar_inconsistencias_serventias <- function(base, lotacoes = NULL) {
 # Conteúdo "Gerar arquivo CSV" — ui_csv_dados() de mod_alertas.R.
 ui_csv_serventias <- ui_csv_dados
 
+# =====================================================
+# ABA DE CADASTRO (Base de Dados / Envio - Serventias)
+# -----------------------------------------------------
+# Mesma estrutura de Pessoal e Auxiliar: as abas Base de Dados e Envio
+# têm os mesmos filtros (Status, Código Serventia, Código da Unidade de
+# Origem, Entrância e Detalhe), gráfico por CEP e CSV. `p` é o prefixo
+# dos ids ("base" ou "envio"). O lado do servidor é
+# servidor_aba_cadastro_serventias().
+# =====================================================
+
+ui_aba_cadastro_serventias <- function(ns, p, titulo, icone) {
+    
+    id <- function(x) ns(paste0(p, "_", x))
+    
+    tabPanel(
+        title = tagList(icon(icone, class = "me-1"), titulo),
+        value = p,
+        
+        div(
+            class = "al-card",
+            # Bloqueado (handler JS "bloquear-filtros", em app.R) enquanto
+            # não houver arquivo.
+            id = id("filtros"),
+            
+            div(class = "al-card-titulo", "Filtros"),
+            
+            div(
+                class = "al-filtros-aviso",
+                icon("lock", class = "me-2"),
+                "Filtros indisponíveis: não há arquivo para exibir. Envie-o pelo botão \"Gerenciar Arquivos\"."
+            ),
+            
+            fluidRow(
+                column(
+                    3,
+                    # Começa em "Ativo"; as demais opções chegam quando o
+                    # arquivo é carregado.
+                    selectInput(
+                        id("status"), "Status",
+                        choices = c("Todos", "Ativo"),
+                        selected = "Ativo",
+                        width = "100%"
+                    )
+                ),
+                column(3, textInput(id("codigo"), "Código Serventia", width = "100%")),
+                column(
+                    3,
+                    selectInput(id("unidade"), "Código da Unidade de Origem", choices = c("Todos"), width = "100%")
+                ),
+                column(
+                    3,
+                    selectInput(id("entrancia"), "Entrância", choices = c("Todos"), width = "100%")
+                )
+            ),
+            
+            fluidRow(
+                column(
+                    12,
+                    textInput(
+                        id("detalhe"), "Detalhe",
+                        placeholder = "Procura o texto digitado em todas as colunas da tabela",
+                        width = "100%"
+                    )
+                )
+            ),
+            
+            fluidRow(
+                column(
+                    12,
+                    actionButton(
+                        id("limpar_filtros"),
+                        tagList(icon("filter-circle-xmark", class = "me-2"), "Limpar Filtros"),
+                        class = "btn btn-outline-secondary btn-sm"
+                    )
+                )
+            )
+        ),
+        
+        div(
+            class = "al-conteudo",
+            
+            tabsetPanel(
+                tabPanel(
+                    tagList(icon("table", class = "me-1"), "Tabela"),
+                    DTOutput(id("tabela"))
+                ),
+                tabPanel(
+                    tagList(icon("chart-column", class = "me-1"), "Gráfico"),
+                    
+                    div(
+                        class = "mt-3",
+                        style = "max-width: 320px;",
+                        id = id("grafico_controles"),
+                        selectInput(
+                            id("grafico_qtd"),
+                            "Exibir",
+                            choices = c(
+                                "Os 20 CEPs com mais serventias" = "20",
+                                "Os 50 CEPs com mais serventias" = "50",
+                                "Todos os CEPs" = "0"
+                            ),
+                            selected = "20",
+                            width = "100%"
+                        )
+                    ),
+                    
+                    girafeOutput(id("grafico_cep"))
+                ),
+                tabPanel(
+                    tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
+                    uiOutput(id("csv_ui"))
+                )
+            )
+        )
+    )
+    
+}
+
+# Chamado dentro de mod_alertas_serventias_server(). `dados` é o
+# reactiveVal com o arquivo lido; `p`, o prefixo dos ids da UI. Devolve
+# os dados filtrados, a função que atualiza os combos e a mensagem de
+# "sem arquivo" (usada na janela de aviso).
+servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
+                                             msg_sem_dados, nome_csv) {
+    
+    ns <- session$ns
+    id <- function(x) paste0(p, "_", x)
+    valor <- function(x) input[[id(x)]]
+    
+    MSG_SEM_RESULTADO <- "Nenhuma serventia encontrada com os filtros aplicados."
+    
+    # Quando o arquivo passa de "sem dados" para "com dados" (primeiro
+    # envio, troca de empresa), o Status volta ao padrão "Ativo".
+    status_anterior <- character(0)
+    
+    atualizar_combos <- function() {
+        
+        df <- dados()
+        
+        status <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_STATUS))
+        unidades <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_UNIDADE_ORIGEM))
+        entrancias <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_ENTRANCIA))
+        
+        status_atual <- if (length(status_anterior) == 0) "Ativo" else valor("status")
+        status_anterior <<- status
+        
+        updateSelectInput(session, id("status"), choices = c("Todos", status),
+                          selected = selecao_valida(status_atual, status, padrao = "Ativo"))
+        updateSelectInput(session, id("unidade"), choices = c("Todos", unidades),
+                          selected = selecao_valida(valor("unidade"), unidades))
+        updateSelectInput(session, id("entrancia"), choices = c("Todos", entrancias),
+                          selected = selecao_valida(valor("entrancia"), entrancias))
+        
+    }
+    
+    # Status volta ao padrão "Ativo" (não para "Todos").
+    observeEvent(valor("limpar_filtros"), {
+        status <- opcoes_combo(valores_coluna_exibicao(dados(), REGEX_COL_STATUS))
+        updateSelectInput(session, id("status"), selected = selecao_valida("Ativo", status))
+        updateTextInput(session, id("codigo"), value = "")
+        updateSelectInput(session, id("unidade"), selected = "Todos")
+        updateSelectInput(session, id("entrancia"), selected = "Todos")
+        updateTextInput(session, id("detalhe"), value = "")
+    }, ignoreInit = TRUE)
+    
+    # Texto de busca por linha (filtro Detalhe) — recalculado só quando o
+    # arquivo muda, não a cada tecla digitada.
+    busca <- reactive({
+        texto_busca_linhas(dados())
+    })
+    
+    # Espera o usuário parar de digitar (400 ms) antes de filtrar.
+    detalhe_d <- debounce(reactive(valor("detalhe")), 400)
+    codigo_d <- debounce(reactive(valor("codigo")), 400)
+    
+    # Filtros combinados como máscaras; a tabela mantém TODAS as colunas
+    # do arquivo, na ordem original.
+    filtrados <- reactive({
+        df <- dados()
+        
+        if (nrow(df) == 0) {
+            return(df)
+        }
+        
+        manter <- rep(TRUE, nrow(df))
+        
+        filtrar_combo <- function(sel, regex) {
+            if (!is.null(sel) && sel != "Todos") {
+                v <- valores_coluna_exibicao(df, regex)
+                if (!is.null(v)) manter <<- manter & v == sel
+            }
+        }
+        
+        filtrar_combo(valor("status"), REGEX_COL_STATUS)
+        filtrar_combo(valor("unidade"), REGEX_COL_UNIDADE_ORIGEM)
+        filtrar_combo(valor("entrancia"), REGEX_COL_ENTRANCIA)
+        
+        codigo <- str_trim(codigo_d() %||% "")
+        col_codigo <- coluna_serventia(df, REGEX_COL_CODIGO_SERVENTIA)
+        if (codigo != "" && !is.null(col_codigo)) {
+            manter <- manter & str_detect(
+                str_to_upper(coalesce(df[[col_codigo]], "")),
+                fixed(str_to_upper(codigo))
+            )
+        }
+        
+        # Detalhe: o texto digitado em QUALQUER coluna (sem diferenciar
+        # maiúsculas/minúsculas nem acentos).
+        detalhe <- str_trim(detalhe_d() %||% "")
+        if (detalhe != "") {
+            manter <- manter & str_detect(busca(), fixed(normalizar_texto_busca(detalhe)))
+        }
+        
+        df[manter, , drop = FALSE]
+    })
+    
+    output[[id("tabela")]] <- renderDT({
+        # Sem arquivo: a área fica vazia — o aviso aparece numa janela ao
+        # selecionar a aba (ver mostrar_alerta_sem_arquivo()).
+        shiny::validate(need(nrow(dados()) > 0, FALSE))
+        
+        df <- filtrados()
+        
+        shiny::validate(need(nrow(df) > 0, MSG_SEM_RESULTADO))
+        
+        tabela_dt(df)
+    })
+    
+    # ---- Gráfico por CEP (ggiraph) ----
+    
+    resumo_cep <- reactive({
+        if (nrow(dados()) == 0) {
+            return(list(resumo = NULL, mensagem = FALSE))
+        }
+        
+        df <- filtrados()
+        
+        if (nrow(df) == 0) {
+            return(list(resumo = NULL, mensagem = MSG_SEM_RESULTADO))
+        }
+        
+        col_cep <- coluna_serventia(df, REGEX_COL_CEP)
+        
+        if (is.null(col_cep)) {
+            return(list(resumo = NULL, mensagem = "Coluna \"CEP\" não encontrada no arquivo carregado."))
+        }
+        
+        col_nome <- coluna_serventia(df, REGEX_COL_NOME_SERVENTIA)
+        
+        resumo <- tibble(
+            CEP = formatar_cep(df[[col_cep]]),
+            Nome = if (is.null(col_nome)) NA_character_ else df[[col_nome]]
+        ) %>%
+            group_by(CEP) %>%
+            summarise(
+                Quantidade = n(),
+                Serventias = resumir_nomes(Nome),
+                .groups = "drop"
+            ) %>%
+            arrange(desc(Quantidade), CEP)
+        
+        list(resumo = resumo, mensagem = NULL)
+    })
+    
+    output[[id("grafico_cep")]] <- renderGirafe({
+        r <- resumo_cep()
+        
+        shiny::validate(need(is.null(r$mensagem), r$mensagem))
+        
+        total_ceps <- nrow(r$resumo)
+        limite <- suppressWarnings(as.integer(valor("grafico_qtd")))
+        
+        resumo <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
+        
+        resumo <- resumo %>%
+            arrange(Quantidade, desc(CEP)) %>%   # com coord_flip, a maior fica no topo
+            mutate(
+                CEP = factor(CEP, levels = unique(CEP)),
+                dica = sprintf(
+                    "<b>CEP %s</b><br/>%s serventia(s)%s",
+                    htmltools::htmlEscape(as.character(CEP)),
+                    format(Quantidade, big.mark = ".", decimal.mark = ","),
+                    ifelse(Serventias == "", "", paste0("<hr style='margin:4px 0'/>", Serventias))
+                )
+            )
+        
+        p <- ggplot(resumo, aes(x = CEP, y = Quantidade)) +
+            geom_col_interactive(aes(tooltip = dica, data_id = CEP), fill = "#2C7FB8") +
+            geom_text(aes(label = Quantidade), hjust = -0.2, size = 3.2) +
+            coord_flip() +
+            scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+            labs(
+                title = "Quantidade de Serventias por CEP",
+                subtitle = sprintf("Exibindo %d de %d CEP(s)", nrow(resumo), total_ceps),
+                x = "",
+                y = "Quantidade"
+            ) +
+            theme_minimal()
+        
+        girafe(
+            ggobj = p,
+            width_svg = 9,
+            height_svg = max(3, 0.28 * nrow(resumo) + 1.6),
+            options = list(
+                opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
+                opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
+                opts_sizing(rescale = TRUE, width = 1)
+            )
+        )
+    })
+    
+    # ---- Gerar arquivo CSV ----
+    
+    output[[id("csv_ui")]] <- renderUI({
+        ui_csv_serventias(ns, id("download_csv"), nrow(filtrados()) > 0)
+    })
+    
+    output[[id("download_csv")]] <- downloadHandler(
+        
+        filename = function() {
+            paste0(nome_csv, "-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
+        },
+        
+        content = function(file) {
+            inicio <- Sys.time()
+            
+            gravar_csv_tabela(filtrados(), file, valor("tabela_rows_all"))
+            
+            showNotification(
+                sprintf("Arquivo CSV gerado em %.2fs.", tempo_decorrido(inicio)),
+                type = "message"
+            )
+        }
+    )
+    
+    list(
+        filtrados = filtrados,
+        atualizar_combos = atualizar_combos,
+        msg_sem_dados = msg_sem_dados
+    )
+    
+}
+
+
 
 mod_alertas_serventias_ui <- function(id) {
     
@@ -775,123 +1134,40 @@ mod_alertas_serventias_ui <- function(id) {
                     id = ns("secao"),
                     
                     # =============================================
-                    # ABA 1 — BASE DE DADOS - SERVENTIAS
+                    # ABA 1 — BASE DE DADOS e ABA 2 — ENVIO
+                    # -------------------------------------------------
+                    # Mesma estrutura de Pessoal e Auxiliar: as duas abas
+                    # têm os mesmos filtros, gráfico e CSV (ver
+                    # ui_aba_cadastro_serventias()).
                     # =============================================
                     
-                    tabPanel(
-                        title = tagList(icon("database", class = "me-1"), "Base de Dados - Serventias"),
-                        value = "base",
-                        
-                        div(
-                            class = "al-card",
-                            
-                            div(class = "al-card-titulo", "Filtros"),
-                            
-                            fluidRow(
-                                column(
-                                    3,
-                                    # Começa em "Ativo" (padrão pedido); as
-                                    # demais opções chegam quando o arquivo
-                                    # é carregado.
-                                    selectInput(
-                                        ns("base_status"), "Status",
-                                        choices = c("Todos", "Ativo"),
-                                        selected = "Ativo",
-                                        width = "100%"
-                                    )
-                                ),
-                                column(3, textInput(ns("base_codigo"), "Código Serventia", width = "100%")),
-                                column(
-                                    3,
-                                    selectInput(
-                                        ns("base_unidade"), "Código da Unidade de Origem",
-                                        choices = c("Todos"), width = "100%"
-                                    )
-                                ),
-                                column(
-                                    3,
-                                    selectInput(
-                                        ns("base_entrancia"), "Entrância",
-                                        choices = c("Todos"), width = "100%"
-                                    )
-                                )
-                            ),
-                            
-                            fluidRow(
-                                column(
-                                    12,
-                                    textInput(
-                                        ns("base_detalhe"), "Detalhe",
-                                        placeholder = "Procura o texto digitado em todas as colunas da tabela",
-                                        width = "100%"
-                                    )
-                                )
-                            ),
-                            
-                            fluidRow(
-                                column(
-                                    12,
-                                    actionButton(
-                                        ns("base_limpar_filtros"),
-                                        tagList(icon("filter-circle-xmark", class = "me-2"), "Limpar Filtros"),
-                                        class = "btn btn-outline-secondary btn-sm"
-                                    )
-                                )
-                            )
-                        ),
-                        
-                        div(
-                            class = "al-conteudo",
-                            
-                            tabsetPanel(
-                                tabPanel(
-                                    tagList(icon("table", class = "me-1"), "Tabela"),
-                                    DTOutput(ns("base_tabela"))
-                                ),
-                                tabPanel(
-                                    tagList(icon("chart-column", class = "me-1"), "Gráfico"),
-                                    
-                                    div(
-                                        class = "mt-3",
-                                        style = "max-width: 320px;",
-                                        selectInput(
-                                            ns("base_grafico_qtd"),
-                                            "Exibir",
-                                            choices = c(
-                                                "Os 20 CEPs com mais serventias" = "20",
-                                                "Os 50 CEPs com mais serventias" = "50",
-                                                "Todos os CEPs" = "0"
-                                            ),
-                                            selected = "20",
-                                            width = "100%"
-                                        )
-                                    ),
-                                    
-                                    girafeOutput(ns("base_grafico_cep"))
-                                ),
-                                tabPanel(
-                                    tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
-                                    uiOutput(ns("base_csv_ui"))
-                                )
-                            )
-                        )
-                    ),
+                    ui_aba_cadastro_serventias(ns, "base", titulo = "Base de Dados", icone = "database"),
+                    
+                    ui_aba_cadastro_serventias(ns, "envio", titulo = "Envio", icone = "paper-plane"),
                     
                     # =============================================
-                    # ABA 2 — ALERTAS - SERVENTIAS
+                    # ABA 3 — ALERTAS - SERVENTIAS
                     # -------------------------------------------------
                     # "Alerta" e "Conflito" se excluem mutuamente, como
                     # em mod_alertas.R.
                     # =============================================
                     
                     tabPanel(
-                        title = tagList(icon("triangle-exclamation", class = "me-1"), "Alertas - Serventias"),
+                        title = tagList(icon("triangle-exclamation", class = "me-1"), "Alertas"),
                         value = "alertas",
                         
                         div(
                             class = "al-card",
+                            # Bloqueado (handler JS "bloquear-filtros") sem arquivo.
+                            id = ns("alertas_filtros"),
                             
                             div(class = "al-card-titulo", "Filtros"),
+                            
+                            div(
+                                class = "al-filtros-aviso",
+                                icon("lock", class = "me-2"),
+                                "Filtros indisponíveis: não há arquivo de alertas para exibir. Envie-o pelo botão \"Gerenciar Arquivos\"."
+                            ),
                             
                             fluidRow(
                                 column(4, selectInput(ns("alerta"), "Alerta", choices = c("Todos"), width = "100%")),
@@ -939,7 +1215,7 @@ mod_alertas_serventias_ui <- function(id) {
                     ),
                     
                     # =============================================
-                    # ABA 3 — INCONSISTÊNCIAS - SERVENTIAS
+                    # ABA 4 — INCONSISTÊNCIAS - SERVENTIAS
                     # -------------------------------------------------
                     # Verificações automáticas sobre a base (ver
                     # verificar_inconsistencias_serventias());
@@ -949,7 +1225,7 @@ mod_alertas_serventias_ui <- function(id) {
                     tabPanel(
                         title = tagList(
                             icon("clipboard-check", class = "me-1"),
-                            "Inconsistências - Serventias",
+                            "Inconsistências",
                             mod_inconsistencias_badge_ui(ns("inc"))
                         ),
                         value = "inconsistencias",
@@ -978,6 +1254,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         
         # Começam vazios: a empresa só é conhecida depois do login.
         dados_base <- reactiveVal(data.frame())   # serventias.csv
+        dados_envio <- reactiveVal(data.frame())  # serventias_envio.xlsx/.csv
         dados <- reactiveVal(data.frame())        # alertas_serventias.csv
         
         # Lotações atuais de magistrados/servidores (outros módulos) — só
@@ -994,6 +1271,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         recarregar <- function() {
             pasta <- pasta_serventias(empresa())
             dados_base(carregar_arquivo_serventias(arquivo_do_tipo(pasta, "base")))
+            dados_envio(carregar_arquivo_serventias(arquivo_do_tipo(pasta, "envio")))
             dados(carregar_arquivo_serventias(arquivo_do_tipo(pasta, "alertas")))
             lotacoes(carregar_lotacoes_empresa(empresa()))
         }
@@ -1027,6 +1305,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             if (!empresa_definida()) {
                 if (!is.null(empresa_carregada())) {
                     dados_base(data.frame())
+                    dados_envio(data.frame())
                     dados(data.frame())
                     lotacoes(NULL)
                     empresa_carregada(NULL)
@@ -1047,40 +1326,36 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         # COMBOS
         # =================================================
         
-        # Opções de Status da base na última atualização: quando o
-        # arquivo passa de "sem dados" para "com dados" (primeiro envio,
-        # troca de empresa), o Status volta ao padrão "Ativo".
-        status_base_anterior <- character(0)
+        # Abas Base de Dados e Envio (mesmos filtros, gráfico e CSV) — ver
+        # servidor_aba_cadastro_serventias().
+        aba_base <- servidor_aba_cadastro_serventias(
+            input, output, session, "base",
+            dados = dados_base,
+            msg_sem_dados = paste0(
+                "Não existe arquivo de Serventias (serventias.xlsx ou serventias.csv)",
+                " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo."
+            ),
+            nome_csv = "base-serventias"
+        )
+        
+        aba_envio <- servidor_aba_cadastro_serventias(
+            input, output, session, "envio",
+            dados = dados_envio,
+            msg_sem_dados = paste0(
+                "Não existe arquivo de envio de Serventias (serventias_envio.xlsx ou .csv)",
+                " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo",
+                " (o nome do arquivo precisa conter \"envio\")."
+            ),
+            nome_csv = "envio-serventias"
+        )
+        
+        dados_base_filtrados <- aba_base$filtrados
+        dados_envio_filtrados <- aba_envio$filtrados
+        MSG_SEM_BASE <- aba_base$msg_sem_dados
         
         atualizar_combos_base <- function() {
-            
-            df <- dados_base()
-            
-            status <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_STATUS))
-            unidades <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_UNIDADE_ORIGEM))
-            entrancias <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_ENTRANCIA))
-            
-            status_atual <- if (length(status_base_anterior) == 0) "Ativo" else input$base_status
-            status_base_anterior <<- status
-            
-            updateSelectInput(
-                session, "base_status",
-                choices = c("Todos", status),
-                selected = selecao_valida(status_atual, status, padrao = "Ativo")
-            )
-            
-            updateSelectInput(
-                session, "base_unidade",
-                choices = c("Todos", unidades),
-                selected = selecao_valida(input$base_unidade, unidades)
-            )
-            
-            updateSelectInput(
-                session, "base_entrancia",
-                choices = c("Todos", entrancias),
-                selected = selecao_valida(input$base_entrancia, entrancias)
-            )
-            
+            aba_base$atualizar_combos()
+            aba_envio$atualizar_combos()
         }
         
         atualizar_combos <- function() {
@@ -1116,7 +1391,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             atualizar_combos()
         }
         
-        observeEvent(list(dados_base(), dados(), ativo()), {
+        observeEvent(list(dados_base(), dados_envio(), dados(), ativo()), {
             req(ativo())
             atualizar_todos_combos()
         }, ignoreInit = FALSE)
@@ -1140,16 +1415,6 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         # ----------------------------------------
         # LIMPAR FILTROS
         # ----------------------------------------
-        
-        # Base: Status volta ao padrão "Ativo" (não para "Todos").
-        observeEvent(input$base_limpar_filtros, {
-            status <- opcoes_combo(valores_coluna_exibicao(dados_base(), REGEX_COL_STATUS))
-            updateSelectInput(session, "base_status", selected = selecao_valida("Ativo", status))
-            updateTextInput(session, "base_codigo", value = "")
-            updateSelectInput(session, "base_unidade", selected = "Todos")
-            updateSelectInput(session, "base_entrancia", selected = "Todos")
-            updateTextInput(session, "base_detalhe", value = "")
-        })
         
         observeEvent(input$limpar_filtros, {
             updateSelectInput(session, "alerta", selected = "Todos")
@@ -1238,7 +1503,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             
         }
         
-        observeEvent(input$gerenciar_arquivos, {
+        abrir_gerenciar_arquivos <- function() {
             
             if (!empresa_definida()) {
                 showNotification(
@@ -1282,6 +1547,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
                     ),
                     
                     linha_arquivo_modal(pasta, "base", "apagar_base"),
+                    linha_arquivo_modal(pasta, "envio", "apagar_envio"),
                     linha_arquivo_modal(pasta, "alertas", "apagar_alertas")
                 ),
                 
@@ -1297,11 +1563,13 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
                     
                     div(
                         class = "al-modal-secao-desc",
-                        "Selecione o arquivo de Serventias e/ou o de Alertas de Serventias ",
-                        "gerados pelo MPM, em ", tags$b(".xlsx"), " ou ", tags$b(".csv"),
+                        "Selecione o arquivo de Serventias, o de envio e/ou o de Alertas de ",
+                        "Serventias gerados pelo MPM, em ", tags$b(".xlsx"), " ou ", tags$b(".csv"),
                         " (um de cada tipo, limite de ", MAX_UPLOAD_MB,
-                        " MB no total). O tipo é identificado pelas colunas: com colunas ",
+                        " MB no total). O tipo é identificado pelas colunas e pelo nome: com colunas ",
                         "\"Alerta: ...\" o arquivo é gravado como ", tags$code("alertas_serventias"),
+                        "; com a coluna CEP, sem alertas e com ", tags$b("envio"), " no nome, como ",
+                        tags$code("serventias_envio"),
                         "; com a coluna CEP e sem alertas, como ", tags$code("serventias"),
                         " — sempre com a extensão original. Um arquivo já existente do ",
                         "mesmo tipo é substituído."
@@ -1338,11 +1606,112 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
                 footer = actionButton(ns("fechar_modal_serventias"), "Fechar")
             ))
             
-        })
+        }
+        
+        observeEvent(input$gerenciar_arquivos, abrir_gerenciar_arquivos())
         
         observeEvent(input$fechar_modal_serventias, {
             removeModal()
             session$sendCustomMessage("limpar-modal-backdrop", list())
+        })
+        
+        # =================================================
+        # SEM ARQUIVO: JANELA DE AVISO E FILTROS BLOQUEADOS
+        # -------------------------------------------------
+        # Igual a Pessoal e Auxiliar. Nas abas Base de Dados, Envio e
+        # Alertas, quando não há arquivo:
+        #   - ao selecionar a aba (ou abrir o módulo nela), abre uma janela
+        #     com o aviso e o botão "Gerenciar Arquivos";
+        #   - os filtros (e os controles do gráfico) ficam bloqueados até
+        #     o arquivo ser enviado — handler JS "bloquear-filtros", em
+        #     app.R;
+        #   - a área da tabela e do gráfico fica vazia.
+        # =================================================
+        
+        ABAS_COM_ARQUIVO <- list(
+            base = list(
+                rotulo = "Base de Dados",
+                mensagem = function() aba_base$msg_sem_dados,
+                sem_arquivo = function() nrow(dados_base()) == 0,
+                ids = function() c(ns("base_filtros"), ns("base_grafico_controles"))
+            ),
+            envio = list(
+                rotulo = "Envio",
+                mensagem = function() aba_envio$msg_sem_dados,
+                sem_arquivo = function() nrow(dados_envio()) == 0,
+                ids = function() c(ns("envio_filtros"), ns("envio_grafico_controles"))
+            ),
+            alertas = list(
+                rotulo = "Alertas",
+                mensagem = function() MSG_SEM_ARQUIVOS,
+                sem_arquivo = function() nrow(dados()) == 0,
+                ids = function() ns("alertas_filtros")
+            )
+        )
+        
+        # Última janela de aviso aberta (aba) — usado nos testes.
+        alerta_sem_arquivo_aberto <- reactiveVal(NULL)
+        
+        mostrar_alerta_sem_arquivo <- function(aba) {
+            
+            cfg <- ABAS_COM_ARQUIVO[[aba]]
+            alerta_sem_arquivo_aberto(aba)
+            
+            showModal(modalDialog(
+                div(
+                    class = "al-sem-arquivo",
+                    role = "alert",
+                    div(class = "al-sem-arquivo-icone", icon("folder-open")),
+                    div(class = "al-sem-arquivo-titulo", sprintf("%s: nenhum arquivo para exibir", cfg$rotulo)),
+                    div(class = "al-sem-arquivo-texto", cfg$mensagem()),
+                    div(
+                        class = "al-sem-arquivo-nota",
+                        "Os filtros desta aba ficam indisponíveis até o arquivo ser enviado."
+                    )
+                ),
+                title = NULL,
+                size = "m",
+                easyClose = TRUE,
+                footer = tagList(
+                    modalButton("Fechar"),
+                    actionButton(
+                        ns("sem_arquivo_gerenciar"),
+                        tagList(icon("folder-open", class = "me-2"), "Gerenciar Arquivos"),
+                        class = "btn btn-primary"
+                    )
+                )
+            ))
+            
+        }
+        
+        # Ao selecionar Base de Dados, Envio ou Alertas — ou ao abrir o
+        # módulo numa delas —, sem arquivo: abre a janela de aviso.
+        observeEvent(list(input$secao, ativo()), {
+            req(isTRUE(ativo()), empresa_definida())
+            aba <- input$secao %||% "base"
+            cfg <- ABAS_COM_ARQUIVO[[aba]]
+            if (!is.null(cfg) && cfg$sem_arquivo()) {
+                mostrar_alerta_sem_arquivo(aba)
+            }
+        }, ignoreInit = FALSE)
+        
+        observeEvent(input$sem_arquivo_gerenciar, abrir_gerenciar_arquivos(), ignoreInit = TRUE)
+        
+        # Filtros bloqueados enquanto não houver arquivo (reaplicado quando
+        # os dados mudam e quando o módulo é aberto).
+        filtros_bloqueados <- reactive({
+            vapply(ABAS_COM_ARQUIVO, function(cfg) cfg$sem_arquivo(), logical(1))
+        })
+        
+        observe({
+            bloq <- filtros_bloqueados()
+            ativo()
+            for (aba in names(ABAS_COM_ARQUIVO)) {
+                session$sendCustomMessage(
+                    "bloquear-filtros",
+                    list(ids = as.list(ABAS_COM_ARQUIVO[[aba]]$ids()), bloqueado = isTRUE(bloq[[aba]]))
+                )
+            }
         })
         
         # ----------------------------------------
@@ -1383,6 +1752,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         }
         
         observeEvent(input$apagar_base, pedir_confirmacao_apagar("base"))
+        observeEvent(input$apagar_envio, pedir_confirmacao_apagar("envio"))
         observeEvent(input$apagar_alertas, pedir_confirmacao_apagar("alertas"))
         
         observeEvent(input$confirmar_apagar, {
@@ -1515,7 +1885,8 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
                         return(NA_character_)
                     }
                     identificar_tipo_arquivo_serventias(
-                        ler_arquivo_serventias(up$datapath[i], extensoes[i], up$name[i], n_max = 5)
+                        ler_arquivo_serventias(up$datapath[i], extensoes[i], up$name[i], n_max = 5),
+                        nome_arquivo = up$name[i]
                     )
                 },
                 character(1)
@@ -1542,7 +1913,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             
             if (any(duplicated(tipos[validos]))) {
                 showNotification(
-                    "Foram selecionados dois arquivos do mesmo tipo. Envie no máximo um arquivo de Serventias e um de Alertas de Serventias.",
+                    "Foram selecionados dois arquivos do mesmo tipo. Envie no máximo um arquivo de cada tipo (base, envio e alertas de Serventias).",
                     type = "error",
                     duration = 12
                 )
@@ -1598,214 +1969,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         })
         
         # =================================================
-        # ABA 1 — BASE DE DADOS - SERVENTIAS
-        # =================================================
-        
-        MSG_SEM_BASE <- paste0(
-            "Não existe arquivo de Serventias (serventias.xlsx ou serventias.csv)",
-            " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo."
-        )
-        
-        MSG_BASE_SEM_RESULTADO <- "Nenhuma serventia encontrada com os filtros aplicados."
-        
-        # Texto de busca por linha (filtro Detalhe) — recalculado só
-        # quando o arquivo muda, não a cada tecla digitada.
-        busca_base <- reactive({
-            texto_busca_linhas(dados_base())
-        })
-        
-        # Espera o usuário parar de digitar (400 ms) antes de filtrar.
-        base_detalhe_d <- debounce(reactive(input$base_detalhe), 400)
-        base_codigo_d <- debounce(reactive(input$base_codigo), 400)
-        
-        # Filtros combinados como máscaras sobre a base completa; a tabela
-        # mantém TODAS as colunas do arquivo, na ordem original.
-        dados_base_filtrados <- reactive({
-            df <- dados_base()
-            
-            if (nrow(df) == 0) {
-                return(df)
-            }
-            
-            manter <- rep(TRUE, nrow(df))
-            
-            if (!is.null(input$base_status) && input$base_status != "Todos") {
-                v <- valores_coluna_exibicao(df, REGEX_COL_STATUS)
-                if (!is.null(v)) manter <- manter & v == input$base_status
-            }
-            
-            codigo <- str_trim(base_codigo_d() %||% "")
-            col_codigo <- coluna_serventia(df, REGEX_COL_CODIGO_SERVENTIA)
-            if (codigo != "" && !is.null(col_codigo)) {
-                manter <- manter & str_detect(
-                    str_to_upper(coalesce(df[[col_codigo]], "")),
-                    fixed(str_to_upper(codigo))
-                )
-            }
-            
-            if (!is.null(input$base_unidade) && input$base_unidade != "Todos") {
-                v <- valores_coluna_exibicao(df, REGEX_COL_UNIDADE_ORIGEM)
-                if (!is.null(v)) manter <- manter & v == input$base_unidade
-            }
-            
-            if (!is.null(input$base_entrancia) && input$base_entrancia != "Todos") {
-                v <- valores_coluna_exibicao(df, REGEX_COL_ENTRANCIA)
-                if (!is.null(v)) manter <- manter & v == input$base_entrancia
-            }
-            
-            # Detalhe: o texto digitado em QUALQUER coluna (sem diferenciar
-            # maiúsculas/minúsculas nem acentos).
-            detalhe <- str_trim(base_detalhe_d() %||% "")
-            if (detalhe != "") {
-                manter <- manter & str_detect(busca_base(), fixed(normalizar_texto_busca(detalhe)))
-            }
-            
-            df[manter, , drop = FALSE]
-        })
-        
-        # ---- Tabela (mesma estrutura do arquivo) ----
-        
-        output$base_tabela <- renderDT({
-            shiny::validate(need(nrow(dados_base()) > 0, MSG_SEM_BASE))
-            
-            df <- dados_base_filtrados()
-            
-            shiny::validate(need(nrow(df) > 0, MSG_BASE_SEM_RESULTADO))
-            
-            datatable(
-                df,
-                filter = "top",
-                rownames = FALSE,
-                width = "100%",
-                options = list(
-                    pageLength = 20,
-                    scrollX = TRUE,
-                    autoWidth = TRUE,
-                    width = "100%"
-                )
-            )
-        })
-        
-        # ---- Gráfico por CEP (ggiraph) ----
-        
-        resumo_cep <- reactive({
-            if (nrow(dados_base()) == 0) {
-                return(list(resumo = NULL, mensagem = MSG_SEM_BASE))
-            }
-            
-            df <- dados_base_filtrados()
-            
-            if (nrow(df) == 0) {
-                return(list(resumo = NULL, mensagem = MSG_BASE_SEM_RESULTADO))
-            }
-            
-            col_cep <- coluna_serventia(df, REGEX_COL_CEP)
-            
-            if (is.null(col_cep)) {
-                return(list(resumo = NULL, mensagem = "Coluna \"CEP\" não encontrada no arquivo carregado."))
-            }
-            
-            col_nome <- coluna_serventia(df, REGEX_COL_NOME_SERVENTIA)
-            
-            resumo <- tibble(
-                CEP = formatar_cep(df[[col_cep]]),
-                Nome = if (is.null(col_nome)) NA_character_ else df[[col_nome]]
-            ) %>%
-                group_by(CEP) %>%
-                summarise(
-                    Quantidade = n(),
-                    Serventias = resumir_nomes(Nome),
-                    .groups = "drop"
-                ) %>%
-                arrange(desc(Quantidade), CEP)
-            
-            list(resumo = resumo, mensagem = NULL)
-        })
-        
-        output$base_grafico_cep <- renderGirafe({
-            r <- resumo_cep()
-            
-            shiny::validate(need(is.null(r$mensagem), r$mensagem))
-            
-            total_ceps <- nrow(r$resumo)
-            limite <- suppressWarnings(as.integer(input$base_grafico_qtd))
-            
-            resumo <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
-            
-            resumo <- resumo %>%
-                arrange(Quantidade, desc(CEP)) %>%   # com coord_flip, a maior fica no topo
-                mutate(
-                    CEP = factor(CEP, levels = unique(CEP)),
-                    dica = sprintf(
-                        "<b>CEP %s</b><br/>%s serventia(s)%s",
-                        htmltools::htmlEscape(as.character(CEP)),
-                        format(Quantidade, big.mark = ".", decimal.mark = ","),
-                        ifelse(Serventias == "", "", paste0("<hr style='margin:4px 0'/>", Serventias))
-                    )
-                )
-            
-            p <- ggplot(resumo, aes(x = CEP, y = Quantidade)) +
-                geom_col_interactive(
-                    aes(tooltip = dica, data_id = CEP),
-                    fill = "#2C7FB8"
-                ) +
-                geom_text(aes(label = Quantidade), hjust = -0.2, size = 3.2) +
-                coord_flip() +
-                scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
-                labs(
-                    title = "Quantidade de Serventias por CEP",
-                    subtitle = sprintf("Exibindo %d de %d CEP(s)", nrow(resumo), total_ceps),
-                    x = "",
-                    y = "Quantidade"
-                ) +
-                theme_minimal()
-            
-            girafe(
-                ggobj = p,
-                width_svg = 9,
-                height_svg = max(3, 0.28 * nrow(resumo) + 1.6),
-                options = list(
-                    opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
-                    opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
-                    opts_sizing(rescale = TRUE, width = 1)
-                )
-            )
-        })
-        
-        # ---- Gerar arquivo CSV ----
-        
-        output$base_csv_ui <- renderUI({
-            ui_csv_serventias(ns, "base_download_csv", nrow(dados_base_filtrados()) > 0)
-        })
-        
-        output$base_download_csv <- downloadHandler(
-            
-            filename = function() {
-                paste0("base-serventias-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
-            },
-            
-            content = function(file) {
-                inicio <- Sys.time()
-                
-                df <- dados_base_filtrados()
-                
-                # Respeita também a busca global e os filtros de coluna do DT.
-                linhas_visiveis <- input$base_tabela_rows_all
-                if (!is.null(linhas_visiveis)) {
-                    df <- df[linhas_visiveis, , drop = FALSE]
-                }
-                
-                readr::write_excel_csv2(df, file, na = "")
-                
-                showNotification(
-                    sprintf("Arquivo CSV gerado em %.2fs.", tempo_decorrido(inicio)),
-                    type = "message"
-                )
-            }
-        )
-        
-        # =================================================
-        # ABA 2 — ALERTAS - SERVENTIAS
+        # ABA 3 — ALERTAS - SERVENTIAS
         # =================================================
         
         MSG_SEM_ARQUIVOS <- paste0(
@@ -1817,6 +1981,8 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         # antes, cada tecla refiltrava e redesenhava tabela e gráficos.
         codigo_d <- debounce(reactive(input$codigo), 400)
         nome_d <- debounce(reactive(input$nome), 400)
+        
+        MSG_ALERTAS_SEM_RESULTADO <- "Nenhum registro encontrado com os filtros aplicados."
         
         dados_filtrados <- reactive({
             req(dados())
@@ -1866,9 +2032,13 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         })
         
         output$tabela <- renderDT({
+            # Sem arquivo: a área fica vazia — o aviso aparece numa janela
+            # ao selecionar a aba (ver mostrar_alerta_sem_arquivo()).
+            shiny::validate(need(nrow(dados()) > 0, FALSE))
+            
             df <- tabela_exibicao()
             
-            shiny::validate(need(nrow(df) > 0, MSG_SEM_ARQUIVOS))
+            shiny::validate(need(nrow(df) > 0, MSG_ALERTAS_SEM_RESULTADO))
             
             datatable(
                 df,
@@ -1887,10 +2057,14 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         # ---- Gráficos: tipo de Alerta/Conflito (echarts4r) e Status (ggiraph) ----
         
         resumo_tipos <- reactive({
+            if (nrow(dados()) == 0) {
+                return(list(resumo = NULL, mensagem = FALSE))
+            }
+            
             df <- dados_filtrados()
             
             if (nrow(df) == 0) {
-                return(list(resumo = NULL, mensagem = MSG_SEM_ARQUIVOS))
+                return(list(resumo = NULL, mensagem = MSG_ALERTAS_SEM_RESULTADO))
             }
             
             colunas_tipo <- c(
@@ -1923,10 +2097,14 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         })
         
         resumo_status <- reactive({
+            if (nrow(dados()) == 0) {
+                return(list(resumo = NULL, mensagem = FALSE))
+            }
+            
             df <- dados_filtrados()
             
             if (nrow(df) == 0) {
-                return(list(resumo = NULL, mensagem = MSG_SEM_ARQUIVOS))
+                return(list(resumo = NULL, mensagem = MSG_ALERTAS_SEM_RESULTADO))
             }
             
             valores <- valores_coluna_exibicao(df, REGEX_COL_STATUS)
@@ -2034,7 +2212,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         )
         
         # =================================================
-        # ABA 3 — INCONSISTÊNCIAS - SERVENTIAS
+        # ABA 4 — INCONSISTÊNCIAS - SERVENTIAS
         # -------------------------------------------------
         # Calculada sobre dados_base() (todos os registros, sem os
         # filtros da aba Base de Dados).
