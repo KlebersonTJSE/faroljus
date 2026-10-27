@@ -1,5 +1,5 @@
 # =====================================================
-# modules/mod_alertas.R
+# modules/mod_pessoal_auxiliar.R
 # -----------------------------------------------------
 # Módulo "Pessoal e Auxiliar" (Quadro de Pessoal e Auxiliar do MPM/CNJ),
 # com quatro abas — mesma estrutura do módulo de Magistrados, mais a aba
@@ -33,7 +33,7 @@
 # atualização de cada um.
 #
 # Também reúne as FUNÇÕES COMPARTILHADAS usadas pelos módulos
-# mod_alertas_serventias.R e mod_alertas_magistrados.R (leitura de
+# mod_serventias.R e mod_magistrados.R (leitura de
 # .xlsx/.csv, localização de colunas, combos, busca, gráfico, CSV) —
 # por isso precisa ser carregado ANTES deles no app.R.
 #
@@ -87,11 +87,11 @@ options(shiny.maxRequestSize = MAX_UPLOAD_MB * 1024^2)
 # -----------------------------------------------------
 # Cada empresa (distro) tem suas próprias subpastas de arquivos:
 #   <PASTA_ALERTAS>/<EMPRESA>/alertas_csv   (Quadro de Pessoal — este módulo)
-#   <PASTA_ALERTAS>/<EMPRESA>/serventias    (mod_alertas_serventias.R)
-#   <PASTA_ALERTAS>/<EMPRESA>/magistrados   (mod_alertas_magistrados.R)
+#   <PASTA_ALERTAS>/<EMPRESA>/serventias    (mod_serventias.R)
+#   <PASTA_ALERTAS>/<EMPRESA>/magistrados   (mod_magistrados.R)
 # PASTA_ALERTAS (env var, default "data") define só o diretório raiz;
 # a empresa é resolvida em tempo de execução a partir do usuário
-# autenticado (ver parâmetro `empresa` de mod_alertas_server(),
+# autenticado (ver parâmetro `empresa` de mod_pessoal_auxiliar_server(),
 # abaixo) — por isso o caminho NÃO é uma constante fixa calculada uma
 # única vez ao carregar o módulo (isso seria compartilhado entre TODAS
 # as sessões do app, já que rodam no mesmo processo R).
@@ -927,7 +927,7 @@ indice_serventias <- function(serventias) {
 
 }
 
-# Base de Serventias da empresa (módulo mod_alertas_serventias.R), ou
+# Base de Serventias da empresa (módulo mod_serventias.R), ou
 # data.frame vazio se o módulo não estiver carregado ou a base não tiver
 # sido enviada.
 carregar_base_serventias_empresa <- function(empresa) {
@@ -1583,6 +1583,41 @@ novo_envio_vazio <- function(colunas = character(0)) {
        fora_situacao = character(0))
 }
 
+# Cartão "Gerar Novo Envio" da aba Envio > Gerar arquivo CSV, com o
+# mesmo visual em Pessoal e Auxiliar, Magistrados e Serventias. O botão
+# baixa ns("novo_envio_download") e fica desabilitado sem linhas.
+ui_novo_envio <- function(ns, pode_gerar, descricao, resumo) {
+
+  div(
+    class = "mt-4 pt-3 border-top",
+    style = "max-width: 640px;",
+
+    div(class = "al-modal-secao-titulo", icon("paper-plane", class = "text-primary"), "Gerar Novo Envio"),
+
+    p(class = "text-muted", descricao),
+
+    div(class = "mb-2", style = "font-size: .85rem;", resumo),
+
+    if (pode_gerar) {
+      downloadButton(
+        ns("novo_envio_download"),
+        "Gerar Novo Envio",
+        icon = icon("paper-plane"),
+        class = "btn btn-primary btn-acao"
+      )
+    } else {
+      tags$button(
+        type = "button",
+        class = "btn btn-primary btn-acao",
+        disabled = "disabled",
+        icon("paper-plane", class = "me-2"),
+        "Gerar Novo Envio"
+      )
+    }
+  )
+
+}
+
 gerar_novo_envio_duplicidade <- function(envio, base, alertas) {
 
   if (is.null(envio) || ncol(envio) == 0) {
@@ -1881,7 +1916,7 @@ consolidar_alertas_tabela <- function(df) {
 # Situação, Órgão de lotação e Detalhe), gráfico e CSV. `p` é o prefixo
 # dos ids ("base" ou "envio": base_status, envio_status...). O lado do
 # servidor é montado por servidor_aba_cadastro_pessoal(), dentro de
-# mod_alertas_server().
+# mod_pessoal_auxiliar_server().
 # =====================================================
 
 ui_aba_cadastro_pessoal <- function(ns, p, titulo, icone) {
@@ -2020,7 +2055,7 @@ ui_aba_cadastro_pessoal <- function(ns, p, titulo, icone) {
 # UI
 # =====================================================
 
-mod_alertas_ui <- function(id) {
+mod_pessoal_auxiliar_ui <- function(id) {
 
   ns <- NS(id)
 
@@ -2357,7 +2392,7 @@ FILTROS_TEXTO_INC_SERVIDORES <- c("CPF" = "CPF", "Nome" = "Nome")
 # =====================================================
 # SERVIDOR DA ABA DE CADASTRO (Base de Dados / Envio)
 # -----------------------------------------------------
-# Chamado dentro de mod_alertas_server(). `dados` é o reactiveVal com o
+# Chamado dentro de mod_pessoal_auxiliar_server(). `dados` é o reactiveVal com o
 # arquivo lido; `p`, o prefixo dos ids da UI (ver
 # ui_aba_cadastro_pessoal()). Devolve a versão de exibição, a filtrada e
 # a função que atualiza os combos.
@@ -2603,7 +2638,7 @@ servidor_aba_cadastro_pessoal <- function(input, output, session, p, dados, mapa
 
 }
 
-mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NULL)) {
+mod_pessoal_auxiliar_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NULL)) {
   moduleServer(id, function(input, output, session) {
 
     ns <- session$ns

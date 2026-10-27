@@ -117,12 +117,17 @@ FarolJus/
 │   ├── auth.R             # login AD (LDAP via Python)
 │   ├── auth_totp.R        # login TOTP, cadastro e auditoria
 │   ├── database.R         # conexão com o IRIS (JDBC)
-│   └── tabelas_auxiliares.R  # códigos do MPM no SQLite (Cargo/Situação)
+│   ├── tabelas_auxiliares.R  # códigos do MPM no SQLite (Cargo/Situação)
+│   └── tabelas_referencia.R  # municípios, competências, tipo/classificação de unidade
+├── referencias/           # tabelas de referência do MPM (CSV, versionadas)
+│   ├── municipios.csv
+│   ├── competencias.csv
+│   └── tipos_classificacao_unidade.csv
 ├── modules/
-│   ├── mod_alertas.R      # Pessoal e Auxiliar (base, envio, alertas, inconsistências)
-│   ├── mod_alertas_serventias.R  # Serventias (base, envio, alertas, inconsistências)
-│   ├── mod_alertas_magistrados.R # Magistrados (base, envio, alertas, inconsistências)
-│   ├── mod_inconsistencias.R     # aba de inconsistências (comum aos módulos)
+│   ├── mod_pessoal_auxiliar.R  # Pessoal e Auxiliar (base, envio, alertas, inconsistências)
+│   ├── mod_magistrados.R       # Magistrados (base, envio, alertas, inconsistências)
+│   ├── mod_serventias.R        # Serventias (base, envio, alertas, inconsistências)
+│   ├── mod_inconsistencias.R   # aba de inconsistências (comum aos módulos)
 │   ├── mod_painel.R       # Painel (indicadores de Magistrados e Servidores)
 │   ├── mod_matricula.R    # matrícula por nome (consulta ao IRIS)
 │   └── mod_totp_admin.R   # janela Administração
@@ -172,6 +177,10 @@ Na primeira execução desta versão, se existir a pasta antiga `<EMPRESA>/pesso
 ### 🗂️ Códigos do MPM (Cargo e Situação profissional)
 
 As nomenclaturas ficam nas tabelas `tab_situacao_profissional_servidor`, `tab_cargo_servidor`, `tab_situacao_profissional_magistrado` e `tab_cargo_magistrado` do `faroljus.db`, criadas automaticamente. Um ajuste feito no banco vale a partir da próxima inicialização do app.
+
+### 🏷️ Nomes no lugar de códigos (tabelas de referência)
+
+Na inicialização, o app cria no `faroljus.db` as tabelas `tab_municipio`, `tab_competencia`, `tab_tipo_unidade` e `tab_classificacao_unidade`, preenchidas a partir dos CSVs da pasta `referencias/` (sem sobrescrever ajustes feitos no banco). Com elas, o módulo Serventias mostra — nas tabelas, gráficos, busca Detalhe, inconsistências e no CSV gerado da tabela — **Municípios Abrangidos** (366 → AREIA BRANCA), **Competências** (1 → Juízo Único), **Tipo** e **Classificação da Unidade Judiciária** (109 → PA - Postos Avançados) e S/N como Sim/Não. O **Gerar Novo Envio** continua saindo com os códigos, como nos arquivos do MPM. Para atualizar uma tabela, edite o CSV (registros novos entram na próxima inicialização) ou o próprio banco.
 
 ### 🔒 Dados que não vão para o Git
 

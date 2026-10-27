@@ -12,7 +12,7 @@
 #   - um contador (badge) para o título da aba.
 #
 # Cada módulo calcula as próprias verificações (ex.:
-# verificar_inconsistencias_servidores(), em mod_alertas.R) e entrega o
+# verificar_inconsistencias_servidores(), em mod_pessoal_auxiliar.R) e entrega o
 # resultado já pronto para exibição; este submódulo só apresenta.
 # O resultado precisa ter as colunas "Verificação", "Gravidade"
 # ("Alta"/"Média") e "Motivo", além da coluna que identifica a entidade
@@ -24,7 +24,7 @@
 #   SERVER: mod_inconsistencias_server("inc", dados = reactive(...), ...)
 #
 # DEPENDÊNCIA: usa ui_csv_dados(), tabela_dt(), gravar_csv_tabela(),
-# contem_texto() e tempo_decorrido(), de mod_alertas.R.
+# contem_texto() e tempo_decorrido(), de mod_pessoal_auxiliar.R.
 # =====================================================
 
 library(shiny)

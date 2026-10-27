@@ -1,5 +1,5 @@
 # =====================================================
-# modules/mod_alertas_serventias.R
+# modules/mod_serventias.R
 # -----------------------------------------------------
 # Módulo "Serventias" (aba Serventias do menu principal), com três abas:
 #
@@ -13,7 +13,7 @@
 #
 #   2) "Alertas - Serventias" — arquivo de alertas de Serventias do MPM,
 #      alertas_serventias.csv (ARQUIVO_ALERTAS_SERVENTIAS). Mesmo
-#      funcionamento de mod_alertas.R (filtros, alertas consolidados na
+#      funcionamento de mod_pessoal_auxiliar.R (filtros, alertas consolidados na
 #      tabela, gráficos, CSV).
 #
 #   3) "Inconsistências - Serventias" — verificações automáticas sobre a
@@ -41,7 +41,7 @@
 #
 # Tudo roda só em R, sobre os arquivos enviados — sem banco de dados.
 #
-# DEPENDÊNCIA: reaproveita funções/constantes definidas em mod_alertas.R
+# DEPENDÊNCIA: reaproveita funções/constantes definidas em mod_pessoal_auxiliar.R
 # e mod_inconsistencias.R — precisa ser carregado DEPOIS deles no app.R.
 # =====================================================
 
@@ -96,8 +96,8 @@ local({
     
     if (length(faltando) > 0) {
         stop(
-            "mod_alertas_serventias.R precisa ser carregado depois de ",
-            "mod_alertas.R e mod_inconsistencias.R. Não encontrado: ",
+            "mod_serventias.R precisa ser carregado depois de ",
+            "mod_pessoal_auxiliar.R e mod_inconsistencias.R. Não encontrado: ",
             paste(faltando, collapse = ", ")
         )
     }
@@ -113,7 +113,7 @@ local({
 # de nome não diferencia maiúsculas/minúsculas.
 # =====================================================
 
-EXTENSOES_SERVENTIAS <- EXTENSOES_PLANILHA   # definida em mod_alertas.R
+EXTENSOES_SERVENTIAS <- EXTENSOES_PLANILHA   # definida em mod_pessoal_auxiliar.R
 
 TIPOS_ARQUIVO_SERVENTIAS <- list(
     base = list(
@@ -150,7 +150,7 @@ nomes_aceitos_tipo <- function(tipo) {
 
 # Arquivos do tipo existentes na pasta, na ordem de prioridade de
 # leitura (.xlsx antes de .csv). O nome é comparado de forma tolerante
-# (normalizar_nome_arquivo(), de mod_alertas.R): "Serventias.xlsx" ou
+# (normalizar_nome_arquivo(), de mod_pessoal_auxiliar.R): "Serventias.xlsx" ou
 # "Alertas Serventias.csv" também são reconhecidos.
 arquivos_do_tipo <- function(pasta, tipo) {
     
@@ -177,7 +177,7 @@ arquivo_do_tipo <- function(pasta, tipo) {
 # =====================================================
 # LEITURA E CARREGAMENTO (vale para os dois arquivos, .xlsx ou .csv)
 # -----------------------------------------------------
-# Usa as funções genéricas de mod_alertas.R: ler_arquivo_dados()
+# Usa as funções genéricas de mod_pessoal_auxiliar.R: ler_arquivo_dados()
 # (planilha pela aba "serventias", se existir; CSV com ";" e fallback) e
 # limpar_dados_lidos() (colunas sem nome vazias, BOM, espaços,
 # duplicadas). Todas as colunas ficam como texto, na ordem do arquivo.
@@ -214,8 +214,125 @@ REGEX_COL_STATUS <- "^status$"
 REGEX_COL_CEP <- "^cep$"
 REGEX_COL_UNIDADE_ORIGEM <- "^codigo da unidade de origem"
 REGEX_COL_ENTRANCIA <- "^entrancia$"
+REGEX_COL_MUNICIPIOS <- "^municipios abrangidos"
+REGEX_COL_COMPETENCIAS <- "^competencias?$"
+REGEX_COL_TIPO_UNIDADE <- "^tipo de unidade"
+REGEX_COL_CLASSIFICACAO_UNIDADE <- "^classificacao da unidade"
+REGEX_COLS_SIM_NAO <- "^(juizo 100% digital|balcao virtual|nucleo de justica 4\\.0)$"
 
-# Funções genéricas de mod_alertas.R, com os nomes usados neste módulo.
+# =====================================================
+# NOMES NO LUGAR DE CÓDIGOS (tabelas de referência)
+# -----------------------------------------------------
+# Só para exibição (tabelas, gráficos, busca Detalhe e o CSV gerado a
+# partir da tabela) — o Gerar Novo Envio sai com os códigos, como nos
+# arquivos. As tabelas vêm do SQLite (ver R/tabelas_referencia.R):
+#   Municípios Abrangidos  366         -> AREIA BRANCA
+#   Competências           1           -> Juízo Único
+#   Tipo de Unidade        UJ1         -> Unidade Judiciária de 1º grau
+#   Classificação          109         -> PA - Postos Avançados
+#   Juizo 100% Digital, Balcão Virtual, Núcleo de Justiça 4.0: S/N -> Sim/Não
+# Código sem correspondência fica como veio.
+# =====================================================
+
+traduzir_referencias_serventias <- function(df) {
+    
+    if (is.null(df) || nrow(df) == 0) {
+        return(df)
+    }
+    
+    nomes <- normalizar_nome_coluna(names(df))
+    
+    aplicar <- function(regex, tabela, maiusculas = FALSE) {
+        for (i in which(str_detect(nomes, regex))) {
+            df[[i]] <<- codigos_para_nomes(df[[i]], tabela, maiusculas = maiusculas)
+        }
+    }
+    
+    aplicar(REGEX_COL_MUNICIPIOS, REF_MUNICIPIOS)
+    aplicar(REGEX_COL_COMPETENCIAS, REF_COMPETENCIAS)
+    aplicar(REGEX_COL_TIPO_UNIDADE, REF_TIPOS_UNIDADE, maiusculas = TRUE)
+    aplicar(REGEX_COL_CLASSIFICACAO_UNIDADE, REF_CLASSIFICACOES_UNIDADE)
+    
+    for (i in which(str_detect(nomes, REGEX_COLS_SIM_NAO))) {
+        v <- str_trim(toupper(as.character(df[[i]])))
+        df[[i]] <- ifelse(!is.na(v) & v == "S", "Sim", ifelse(!is.na(v) & v == "N", "Não", df[[i]]))
+    }
+    
+    df
+    
+}
+
+# Agrupamentos do gráfico das abas Base de Dados e Envio (rótulo ->
+# regex da coluna). Municípios e Competências podem ter vários valores
+# por serventia: cada um conta para o seu grupo.
+AGRUPAMENTOS_SERVENTIAS <- c(
+    "CEP"                          = REGEX_COL_CEP,
+    "Município abrangido"          = REGEX_COL_MUNICIPIOS,
+    "Competência"                  = REGEX_COL_COMPETENCIAS,
+    "Classificação da unidade"     = REGEX_COL_CLASSIFICACAO_UNIDADE,
+    "Tipo de unidade"              = REGEX_COL_TIPO_UNIDADE,
+    "Entrância"                    = REGEX_COL_ENTRANCIA,
+    "Código da Unidade de Origem"  = REGEX_COL_UNIDADE_ORIGEM
+)
+
+AGRUPAMENTOS_MULTIPLOS_SERVENTIAS <- c("Município abrangido", "Competência")
+
+# Resumo do gráfico das abas Base de Dados e Envio: quantidade de
+# serventias por grupo (CEP, município abrangido, competência...) e os
+# nomes (ou códigos) das serventias de cada grupo, para o tooltip. NULL
+# se o arquivo não tiver a coluna do agrupamento.
+resumo_agrupamento_serventias <- function(df, agrupar) {
+    
+    col <- coluna_serventia(df, AGRUPAMENTOS_SERVENTIAS[[agrupar]])
+    
+    if (is.null(col)) {
+        return(NULL)
+    }
+    
+    col_nome <- coluna_serventia(df, REGEX_COL_NOME_SERVENTIA)
+    col_codigo <- coluna_serventia(df, REGEX_COL_CODIGO_SERVENTIA)
+    
+    # Identificação da serventia no tooltip: nome, ou o código se o
+    # arquivo não tiver nome (ex.: arquivo de envio).
+    quem <- if (!is.null(col_nome)) {
+        df[[col_nome]]
+    } else if (!is.null(col_codigo)) {
+        df[[col_codigo]]
+    } else {
+        rep(NA_character_, nrow(df))
+    }
+    
+    grupos <- if (agrupar == "CEP") {
+        as.list(formatar_cep(df[[col]]))
+    } else if (agrupar %in% AGRUPAMENTOS_MULTIPLOS_SERVENTIAS) {
+        lapply(as.character(df[[col]]), function(v) {
+            partes <- str_trim(strsplit(coalesce(v, ""), ";", fixed = TRUE)[[1]])
+            partes <- partes[partes != ""]
+            if (length(partes) == 0) ROTULO_SERV_VAZIO else partes
+        })
+    } else {
+        v <- str_trim(as.character(df[[col]]))
+        as.list(ifelse(is.na(v) | v == "", ROTULO_SERV_VAZIO, v))
+    }
+    
+    resumo <- tibble(
+        Grupo = unlist(grupos, use.names = FALSE),
+        Nome = rep(as.character(quem), lengths(grupos))
+    ) %>%
+        group_by(Grupo) %>%
+        summarise(
+            Quantidade = n(),
+            Serventias = resumir_nomes(Nome),
+            .groups = "drop"
+        ) %>%
+        arrange(desc(Quantidade), Grupo)
+    
+    resumo
+    
+}
+
+
+# Funções genéricas de mod_pessoal_auxiliar.R, com os nomes usados neste módulo.
 coluna_serventia <- coluna_por_regex
 valores_coluna_exibicao <- valores_coluna_regex
 ROTULO_SERV_VAZIO <- ROTULO_VALOR_VAZIO
@@ -254,10 +371,14 @@ identificar_tipo_arquivo_serventias <- function(df, nome_arquivo = NULL) {
         return(NA_character_)
     }
     
-    # Sem colunas de alerta, com CEP: base, ou envio se o nome do arquivo
-    # tiver "envio" (mesma regra de identificar_tipo_arquivo_pessoal()).
-    eh_envio <- !is.null(nome_arquivo) && length(nome_arquivo) == 1 && !is.na(nome_arquivo) &&
-        str_detect(normalizar_nome_arquivo(nome_arquivo), REGEX_NOME_ARQUIVO_ENVIO)
+    # Sem colunas de alerta: base ou envio. É envio quando o nome do
+    # arquivo tem "envio" (mesma regra de Pessoal e Auxiliar) OU quando
+    # não tem a coluna Status — o MPM acrescenta Status na base que ele
+    # devolve; o arquivo gerado pelo órgão para envio não tem (ex.:
+    # "Magistrados_i.xlsx", "serventias_i.xlsx").
+    eh_envio <- (!is.null(nome_arquivo) && length(nome_arquivo) == 1 && !is.na(nome_arquivo) &&
+        str_detect(normalizar_nome_arquivo(nome_arquivo), REGEX_NOME_ARQUIVO_ENVIO)) ||
+        is.null(coluna_serventia(df, REGEX_COL_STATUS))
     
     if (eh_envio) "envio" else "base"
     
@@ -268,7 +389,7 @@ identificar_tipo_arquivo_serventias <- function(df, nome_arquivo = NULL) {
 # =====================================================
 
 # O filtro Detalhe usa normalizar_texto_busca() e texto_busca_linhas(),
-# definidas em mod_alertas.R.
+# definidas em mod_pessoal_auxiliar.R.
 
 
 # CEP para exibição no gráfico: "49010080" -> "49010-080". O que não
@@ -591,8 +712,76 @@ verificar_inconsistencias_serventias <- function(base, lotacoes = NULL) {
 # UI
 # =====================================================
 
-# Conteúdo "Gerar arquivo CSV" — ui_csv_dados() de mod_alertas.R.
+# Conteúdo "Gerar arquivo CSV" — ui_csv_dados() de mod_pessoal_auxiliar.R.
 ui_csv_serventias <- ui_csv_dados
+
+# =====================================================
+# NOVO ENVIO — SERVENTIAS COM ALERTA
+# -----------------------------------------------------
+# O arquivo de Serventias não tem CPF nem datas de situação, então a
+# regra de Pessoal e Auxiliar (encerrar o registro anterior e incluir o
+# novo) não se aplica. Aqui o "Gerar Novo Envio" gera um CSV só com as
+# linhas do arquivo de ENVIO cujo Código Serventia aparece no arquivo de
+# ALERTAS com algum alerta/conflito preenchido — exatamente como estão
+# no envio (mesmas colunas e ordem; datas seriais do Excel em
+# dd/mm/aaaa), para reenviar ao MPM depois de corrigidas.
+#
+# Devolve list(dados, codigos_alerta, sem_envio): códigos com alerta e,
+# entre eles, os que não estão no arquivo de envio.
+# =====================================================
+
+gerar_novo_envio_serventias <- function(envio, alertas) {
+    
+    colunas <- if (is.null(envio)) character(0) else names(envio)
+    vazio <- list(dados = novo_envio_vazio(colunas)$dados, codigos_alerta = character(0), sem_envio = character(0))
+    
+    if (is.null(envio) || ncol(envio) == 0 || is.null(alertas) || nrow(alertas) == 0) {
+        return(vazio)
+    }
+    
+    col_cod_alertas <- coluna_serventia(alertas, REGEX_COL_CODIGO_SERVENTIA)
+    cols_alerta <- c(colunas_por_prefixo(alertas, "Alerta"), colunas_por_prefixo(alertas, "Conflito"))
+    
+    if (is.null(col_cod_alertas) || length(cols_alerta) == 0) {
+        return(vazio)
+    }
+    
+    tem_alerta <- Reduce(`|`, lapply(cols_alerta, function(c) {
+        v <- alertas[[c]]
+        !is.na(v) & str_trim(v) != ""
+    }))
+    
+    codigos <- unique(codigo_limpo(alertas[[col_cod_alertas]][tem_alerta]))
+    codigos <- codigos[!is.na(codigos) & codigos != ""]
+    
+    if (length(codigos) == 0) {
+        return(vazio)
+    }
+    
+    vazio$codigos_alerta <- codigos
+    
+    col_cod_envio <- coluna_serventia(envio, REGEX_COL_CODIGO_SERVENTIA)
+    
+    if (is.null(col_cod_envio) || nrow(envio) == 0) {
+        vazio$sem_envio <- codigos
+        return(vazio)
+    }
+    
+    cod_envio <- codigo_limpo(envio[[col_cod_envio]])
+    
+    dados <- envio[cod_envio %in% codigos, , drop = FALSE]
+    dados <- as.data.frame(lapply(dados, function(v) { v <- as.character(v); v[is.na(v)] <- ""; v }),
+                           check.names = FALSE, stringsAsFactors = FALSE)
+    names(dados) <- colunas
+    rownames(dados) <- NULL
+    
+    for (c in colunas[str_detect(normalizar_nome_coluna(colunas), REGEX_COLS_DATA_ENVIO)]) {
+        dados[[c]] <- data_formato_envio(dados[[c]])
+    }
+    
+    list(dados = dados, codigos_alerta = codigos, sem_envio = setdiff(codigos, cod_envio))
+    
+}
 
 # =====================================================
 # ABA DE CADASTRO (Base de Dados / Envio - Serventias)
@@ -683,20 +872,31 @@ ui_aba_cadastro_serventias <- function(ns, p, titulo, icone) {
                 tabPanel(
                     tagList(icon("chart-column", class = "me-1"), "Gráfico"),
                     
-                    div(
+                    fluidRow(
                         class = "mt-3",
-                        style = "max-width: 320px;",
                         id = id("grafico_controles"),
-                        selectInput(
-                            id("grafico_qtd"),
-                            "Exibir",
-                            choices = c(
-                                "Os 20 CEPs com mais serventias" = "20",
-                                "Os 50 CEPs com mais serventias" = "50",
-                                "Todos os CEPs" = "0"
-                            ),
-                            selected = "20",
-                            width = "100%"
+                        column(
+                            4,
+                            selectInput(
+                                id("grafico_agrupar"), "Agrupar por",
+                                choices = names(AGRUPAMENTOS_SERVENTIAS),
+                                selected = "CEP",
+                                width = "100%"
+                            )
+                        ),
+                        column(
+                            4,
+                            selectInput(
+                                id("grafico_qtd"),
+                                "Exibir",
+                                choices = c(
+                                    "Os 20 maiores grupos" = "20",
+                                    "Os 50 maiores grupos" = "50",
+                                    "Todos os grupos" = "0"
+                                ),
+                                selected = "20",
+                                width = "100%"
+                            )
                         )
                     ),
                     
@@ -712,12 +912,12 @@ ui_aba_cadastro_serventias <- function(ns, p, titulo, icone) {
     
 }
 
-# Chamado dentro de mod_alertas_serventias_server(). `dados` é o
+# Chamado dentro de mod_serventias_server(). `dados` é o
 # reactiveVal com o arquivo lido; `p`, o prefixo dos ids da UI. Devolve
 # os dados filtrados, a função que atualiza os combos e a mensagem de
 # "sem arquivo" (usada na janela de aviso).
 servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
-                                             msg_sem_dados, nome_csv) {
+                                             msg_sem_dados, nome_csv, extra_csv = NULL) {
     
     ns <- session$ns
     id <- function(x) paste0(p, "_", x)
@@ -725,13 +925,21 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
     
     MSG_SEM_RESULTADO <- "Nenhuma serventia encontrada com os filtros aplicados."
     
+    # Mesmas colunas e ordem do arquivo, com nomes no lugar dos códigos
+    # (município, competência, tipo e classificação da unidade, S/N) —
+    # ver traduzir_referencias_serventias(). Tabela, filtros, Detalhe,
+    # gráfico e CSV usam esta versão.
+    exibicao <- reactive({
+        traduzir_referencias_serventias(dados())
+    })
+    
     # Quando o arquivo passa de "sem dados" para "com dados" (primeiro
     # envio, troca de empresa), o Status volta ao padrão "Ativo".
     status_anterior <- character(0)
     
     atualizar_combos <- function() {
         
-        df <- dados()
+        df <- exibicao()
         
         status <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_STATUS))
         unidades <- opcoes_combo(valores_coluna_exibicao(df, REGEX_COL_UNIDADE_ORIGEM))
@@ -762,7 +970,7 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
     # Texto de busca por linha (filtro Detalhe) — recalculado só quando o
     # arquivo muda, não a cada tecla digitada.
     busca <- reactive({
-        texto_busca_linhas(dados())
+        texto_busca_linhas(exibicao())
     })
     
     # Espera o usuário parar de digitar (400 ms) antes de filtrar.
@@ -772,7 +980,7 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
     # Filtros combinados como máscaras; a tabela mantém TODAS as colunas
     # do arquivo, na ordem original.
     filtrados <- reactive({
-        df <- dados()
+        df <- exibicao()
         
         if (nrow(df) == 0) {
             return(df)
@@ -822,7 +1030,7 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
         tabela_dt(df)
     })
     
-    # ---- Gráfico por CEP (ggiraph) ----
+    # ---- Gráfico (agrupamento selecionável; padrão: CEP) ----
     
     resumo_cep <- reactive({
         if (nrow(dados()) == 0) {
@@ -835,27 +1043,16 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
             return(list(resumo = NULL, mensagem = MSG_SEM_RESULTADO))
         }
         
-        col_cep <- coluna_serventia(df, REGEX_COL_CEP)
+        agrupar <- valor("grafico_agrupar") %||% "CEP"
+        if (!(agrupar %in% names(AGRUPAMENTOS_SERVENTIAS))) agrupar <- "CEP"
         
-        if (is.null(col_cep)) {
-            return(list(resumo = NULL, mensagem = "Coluna \"CEP\" não encontrada no arquivo carregado."))
+        resumo <- resumo_agrupamento_serventias(df, agrupar)
+        
+        if (is.null(resumo)) {
+            return(list(resumo = NULL, mensagem = sprintf("Coluna \"%s\" não encontrada no arquivo carregado.", agrupar)))
         }
         
-        col_nome <- coluna_serventia(df, REGEX_COL_NOME_SERVENTIA)
-        
-        resumo <- tibble(
-            CEP = formatar_cep(df[[col_cep]]),
-            Nome = if (is.null(col_nome)) NA_character_ else df[[col_nome]]
-        ) %>%
-            group_by(CEP) %>%
-            summarise(
-                Quantidade = n(),
-                Serventias = resumir_nomes(Nome),
-                .groups = "drop"
-            ) %>%
-            arrange(desc(Quantidade), CEP)
-        
-        list(resumo = resumo, mensagem = NULL)
+        list(resumo = resumo, mensagem = NULL, agrupar = agrupar)
     })
     
     output[[id("grafico_cep")]] <- renderGirafe({
@@ -863,40 +1060,44 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
         
         shiny::validate(need(is.null(r$mensagem), r$mensagem))
         
-        total_ceps <- nrow(r$resumo)
+        total <- nrow(r$resumo)
         limite <- suppressWarnings(as.integer(valor("grafico_qtd")))
         
         resumo <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
+        prefixo <- if (identical(r$agrupar, "CEP")) "CEP " else ""
         
         resumo <- resumo %>%
-            arrange(Quantidade, desc(CEP)) %>%   # com coord_flip, a maior fica no topo
+            arrange(Quantidade, desc(Grupo)) %>%   # com coord_flip, a maior fica no topo
             mutate(
-                CEP = factor(CEP, levels = unique(CEP)),
+                rotulo = str_wrap(paste0(prefixo, Grupo), 45),
+                rotulo = factor(rotulo, levels = unique(rotulo)),
                 dica = sprintf(
-                    "<b>CEP %s</b><br/>%s serventia(s)%s",
-                    htmltools::htmlEscape(as.character(CEP)),
+                    "<b>%s</b><br/>%s serventia(s)%s",
+                    htmltools::htmlEscape(paste0(prefixo, Grupo)),
                     format(Quantidade, big.mark = ".", decimal.mark = ","),
                     ifelse(Serventias == "", "", paste0("<hr style='margin:4px 0'/>", Serventias))
                 )
             )
         
-        p <- ggplot(resumo, aes(x = CEP, y = Quantidade)) +
-            geom_col_interactive(aes(tooltip = dica, data_id = CEP), fill = "#2C7FB8") +
+        p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
+            geom_col_interactive(aes(tooltip = dica, data_id = Grupo), fill = "#2C7FB8") +
             geom_text(aes(label = Quantidade), hjust = -0.2, size = 3.2) +
             coord_flip() +
             scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
             labs(
-                title = "Quantidade de Serventias por CEP",
-                subtitle = sprintf("Exibindo %d de %d CEP(s)", nrow(resumo), total_ceps),
+                title = sprintf("Quantidade de Serventias por %s", r$agrupar),
+                subtitle = sprintf("Exibindo %d de %d grupo(s)", nrow(resumo), total),
                 x = "",
                 y = "Quantidade"
             ) +
             theme_minimal()
         
+        linhas_rotulo <- sum(str_count(levels(resumo$rotulo), "\n") + 1)
+        
         girafe(
             ggobj = p,
             width_svg = 9,
-            height_svg = max(3, 0.28 * nrow(resumo) + 1.6),
+            height_svg = max(3, 0.28 * max(nrow(resumo), linhas_rotulo) + 1.6),
             options = list(
                 opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
                 opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
@@ -907,8 +1108,13 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
     
     # ---- Gerar arquivo CSV ----
     
+    # `extra_csv`: UI adicional da aba "Gerar arquivo CSV" (no Envio, o
+    # botão "Gerar Novo Envio").
     output[[id("csv_ui")]] <- renderUI({
-        ui_csv_serventias(ns, id("download_csv"), nrow(filtrados()) > 0)
+        tagList(
+            ui_csv_serventias(ns, id("download_csv"), nrow(filtrados()) > 0),
+            if (is.function(extra_csv)) extra_csv()
+        )
     })
     
     output[[id("download_csv")]] <- downloadHandler(
@@ -930,6 +1136,7 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
     )
     
     list(
+        exibicao = exibicao,
         filtrados = filtrados,
         atualizar_combos = atualizar_combos,
         msg_sem_dados = msg_sem_dados
@@ -939,14 +1146,14 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
 
 
 
-mod_alertas_serventias_ui <- function(id) {
+mod_serventias_ui <- function(id) {
     
     ns <- NS(id)
     
     tagList(
         
         # ===================================================
-        # ESTILO (escopo deste módulo) — mesmo visual de mod_alertas.R
+        # ESTILO (escopo deste módulo) — mesmo visual de mod_pessoal_auxiliar.R
         # ===================================================
         
         tags$head(
@@ -1149,7 +1356,7 @@ mod_alertas_serventias_ui <- function(id) {
                     # ABA 3 — ALERTAS - SERVENTIAS
                     # -------------------------------------------------
                     # "Alerta" e "Conflito" se excluem mutuamente, como
-                    # em mod_alertas.R.
+                    # em mod_pessoal_auxiliar.R.
                     # =============================================
                     
                     tabPanel(
@@ -1247,7 +1454,7 @@ mod_alertas_serventias_ui <- function(id) {
 # SERVER
 # =====================================================
 
-mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NULL)) {
+mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NULL)) {
     moduleServer(id, function(input, output, session) {
         
         ns <- session$ns
@@ -1279,7 +1486,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         # ----------------------------------------
         # CONTADOR DO CAMPO DE UPLOAD — ID novo do fileInput a cada
         # abertura do modal (evita reenviar a seleção de uma abertura
-        # anterior; mesmo motivo de mod_alertas.R).
+        # anterior; mesmo motivo de mod_pessoal_auxiliar.R).
         # ----------------------------------------
         contador_upload <- reactiveVal(0)
         
@@ -1295,7 +1502,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         # CARREGA DADOS DA EMPRESA ATUAL (login / troca de empresa)
         # ----------------------------------------
         
-        # Carga SOB DEMANDA (ver mod_alertas.R): só quando o módulo é
+        # Carga SOB DEMANDA (ver mod_pessoal_auxiliar.R): só quando o módulo é
         # aberto pela primeira vez para a empresa da sessão, em vez de logo
         # no login. Com a empresa vazia (logout), os dados são descartados.
         empresa_carregada <- reactiveVal(NULL)
@@ -1346,11 +1553,69 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
                 " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo",
                 " (o nome do arquivo precisa conter \"envio\")."
             ),
-            nome_csv = "envio-serventias"
+            nome_csv = "envio-serventias",
+            extra_csv = function() uiOutput(ns("novo_envio_ui"))
+        )
+        
+        # ---- Envio > Gerar arquivo CSV > "Gerar Novo Envio" ----
+        # Ver gerar_novo_envio_serventias(): as linhas do envio das
+        # serventias que estão no arquivo de alertas, sem alteração (os
+        # filtros da aba não se aplicam).
+        novo_envio <- reactive({
+            gerar_novo_envio_serventias(dados_envio(), dados())
+        })
+        
+        output$novo_envio_ui <- renderUI({
+            
+            r <- novo_envio()
+            
+            ui_novo_envio(
+                ns, nrow(r$dados) > 0,
+                descricao = tagList(
+                    "Gera um arquivo com as linhas do arquivo de envio das serventias cujo ",
+                    tags$b("Código Serventia"), " aparece no arquivo de ", tags$b("Alertas"),
+                    " com algum alerta ou conflito, exatamente como estão no envio (mesmas colunas e ordem), ",
+                    "para reenviar ao MPM. Os filtros desta aba não se aplicam."
+                ),
+                resumo = if (length(r$codigos_alerta) == 0) {
+                    "Nenhuma serventia com alerta no arquivo de alertas."
+                } else {
+                    tagList(
+                        sprintf("%d serventia(s) com alerta; %d linha(s) no novo envio.",
+                                length(r$codigos_alerta), nrow(r$dados)),
+                        if (length(r$sem_envio) > 0) {
+                            div(class = "text-warning", sprintf(
+                                "%d serventia(s) com alerta não estão no arquivo de envio: %s.",
+                                length(r$sem_envio), paste(head(r$sem_envio, 10), collapse = ", ")
+                            ))
+                        }
+                    )
+                }
+            )
+            
+        })
+        
+        output$novo_envio_download <- downloadHandler(
+            
+            filename = function() {
+                paste0("novo-envio-serventias-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
+            },
+            
+            content = function(file) {
+                r <- novo_envio()
+                readr::write_excel_csv2(r$dados, file, na = "")
+                
+                showNotification(
+                    sprintf("Novo envio gerado: %d linha(s).", nrow(r$dados)),
+                    type = "message"
+                )
+            }
         )
         
         dados_base_filtrados <- aba_base$filtrados
         dados_envio_filtrados <- aba_envio$filtrados
+        base_exibicao <- aba_base$exibicao
+        envio_exibicao <- aba_envio$exibicao
         MSG_SEM_BASE <- aba_base$msg_sem_dados
         
         atualizar_combos_base <- function() {
@@ -1735,7 +2000,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             tipo_para_apagar(tipo)
             
             # Fecha o modal atual antes de abrir a confirmação (evita o
-            # backdrop "grudado" — ver mod_alertas.R).
+            # backdrop "grudado" — ver mod_pessoal_auxiliar.R).
             removeModal()
             
             showModal(modalDialog(
@@ -2027,8 +2292,9 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             df
         })
         
+        # Nomes no lugar dos códigos também na tabela de alertas.
         tabela_exibicao <- reactive({
-            consolidar_alertas_serventias_tabela(dados_filtrados())
+            traduzir_referencias_serventias(consolidar_alertas_serventias_tabela(dados_filtrados()))
         })
         
         output$tabela <- renderDT({
@@ -2232,7 +2498,8 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         
         mod_inconsistencias_server(
             "inc",
-            dados = inconsistencias,
+            # Nomes no lugar dos códigos (município, competência...).
+            dados = reactive(traduzir_referencias_serventias(inconsistencias())),
             verificacoes = reactive({
                 lista <- list(
                     list(descricao = "O mesmo código em mais de um registro da base. Alta: dois ou mais registros ativos."),

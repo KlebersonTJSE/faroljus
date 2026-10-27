@@ -48,7 +48,7 @@ checar <- function(descricao, condicao) {
 dir_teste <- file.path(tempdir(), "faroljus_teste")
 unlink(dir_teste, recursive = TRUE)
 dir.create(file.path(dir_teste, "data"), recursive = TRUE)
-for (item in c("app.R", "README.md", "R", "modules", "img")) {
+for (item in c("app.R", "README.md", "R", "modules", "img", "referencias")) {
     file.copy(file.path(raiz_projeto, item), dir_teste, recursive = TRUE)
 }
 
@@ -415,7 +415,7 @@ dir.create(pasta_serv, recursive = TRUE, showWarnings = FALSE)
 writeLines(c("Código Serventia;Nome Serventia;CEP;Status", "1;Vara A;49000-000;Ativo"),
            file.path(pasta_serv, "serventias.csv"))
 
-testServer(mod_alertas_serventias_server,
+testServer(mod_serventias_server,
            args = list(ativo = reactive(FALSE), empresa = reactive("TJSE")), {
     session$flushReact()
     checar("módulo fechado não lê arquivos", nrow(dados_base()) == 0)
@@ -423,7 +423,7 @@ testServer(mod_alertas_serventias_server,
 
 ativo_rv <- reactiveVal(FALSE)
 empresa_rv <- reactiveVal("TJSE")
-testServer(mod_alertas_serventias_server,
+testServer(mod_serventias_server,
            args = list(ativo = ativo_rv, empresa = empresa_rv), {
     ativo_rv(TRUE)
     session$flushReact()
@@ -433,7 +433,7 @@ testServer(mod_alertas_serventias_server,
     checar("sem empresa (logout), dados são descartados", nrow(dados_base()) == 0)
 })
 
-testServer(mod_alertas_serventias_server,
+testServer(mod_serventias_server,
            args = list(ativo = reactive(TRUE), empresa = reactive(NULL)), {
     session$flushReact()
     checar("sem empresa, nada é carregado", nrow(dados_base()) == 0)
@@ -449,9 +449,9 @@ testServer(server, {
     session$setInputs(entrar = 0)
     session$setInputs(usuario = "ana", senha = "senha certa", distro_ad = "TJSE", entrar = 1)
     h <- as.character(output$tela_principal$html)
-    p_mag <- pos_em(h, 'data-menu="AlertasMagistrados"')
-    p_pes <- pos_em(h, 'data-menu="Alertas"')
-    p_serv <- pos_em(h, 'data-menu="AlertasServentias"')
+    p_mag <- pos_em(h, 'data-menu="Magistrados"')
+    p_pes <- pos_em(h, 'data-menu="PessoalAuxiliar"')
+    p_serv <- pos_em(h, 'data-menu="Serventias"')
     p_cfg <- pos_em(h, 'class="icon-grupo"')
     p_sair <- pos_em(h, 'id="sair"')
     p_painel <- pos_em(h, 'data-menu="Painel"')
@@ -461,7 +461,7 @@ testServer(server, {
     checar("Painel abre a janela 'Processando os dados'",
            grepl("farolPainelProcessando", h, fixed = TRUE))
     checar("barra começa expandida", grepl('class="icon-bar expandida"', h, fixed = TRUE))
-    checar("módulo inicial é Magistrados", identical(menuSelecionado(), ABA_ALERTAS_MAGISTRADOS))
+    checar("módulo inicial é Magistrados", identical(menuSelecionado(), ABA_MAGISTRADOS))
     session$setInputs(ir_painel = 1)
     checar("clicar em Painel seleciona o Painel", identical(menuSelecionado(), ABA_PAINEL))
     sub <- regmatches(h, regexpr('class="icon-submenu".*?id="sair"', h))
@@ -540,7 +540,7 @@ escrever_csv(c(
     "44455566677;BELTRANO SOUZA;1;5;01/02/2026;VARA B;;2 registros ativos"
 ), file.path(caminho_alertas("TJSE"), "teste.csv"))
 
-testServer(mod_alertas_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
     session$setInputs(alerta = "Todos", conflito = "Todos", cpf = "", nome = "")
     checar("carrega o CSV de alertas da empresa", nrow(dados()) == 2)
 
@@ -559,7 +559,7 @@ testServer(mod_alertas_server, args = list(empresa = reactive("TJSE"), ativo = r
            any(grepl("^Estagi", tabela_exibicao()$Cargo)) && !any(tabela_exibicao()$Cargo %in% c("1", "5")))
 })
 
-testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
     checar("empresa sem arquivos: tabela de alertas fica vazia (aviso vai para a janela)", isFALSE(mensagem_sem_linhas()))
 })
 
@@ -650,7 +650,7 @@ checar("arquivo sem CPF/órgão não é reconhecido",
 
 unlink(caminho_alertas("TJSE"), recursive = TRUE)
 
-testServer(mod_alertas_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
     session$setInputs(gerenciar_arquivos = 1)
     session$setInputs(upload_arquivos_1 = data.frame(
         name = c("../../x/qualquer_nome.csv", "../../MPRO/alertas_csv/evil.csv", "notas.csv"),
@@ -719,7 +719,7 @@ writeLines("antigo", file.path(pasta_srv, "serventias.xlsx"))
 srv_csv <- file.path(dir_up, "minha_base.csv")
 file.copy(file.path(pasta_srv, "serventias.csv"), srv_csv, overwrite = TRUE)
 unlink(file.path(pasta_srv, "serventias.csv"))
-testServer(mod_alertas_serventias_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+testServer(mod_serventias_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
     session$setInputs(gerenciar_arquivos = 1)
     session$setInputs(upload_serventias_1 = data.frame(
         name = "../minha_base.csv", size = file.size(srv_csv), type = "text/csv", datapath = srv_csv
@@ -881,7 +881,7 @@ checar("mesmo arquivo sem \"envio\" no nome continua sendo base",
 checar("alertas com \"envio\" no nome continuam sendo alertas",
        identificar_tipo_arquivo_pessoal(ler_arquivo_dados(alertas_csv, "csv"), "alertas_envio.csv") == "alertas")
 
-testServer(mod_alertas_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
     session$flushReact()
     n_base <- nrow(dados_base())
     session$setInputs(gerenciar_arquivos = 1)
@@ -1030,7 +1030,7 @@ dir.create(caminho_alertas("TJSE"), recursive = TRUE, showWarnings = FALSE)
 readr::write_excel_csv2(alertas_dup, file.path(caminho_alertas("TJSE"), "alertas_dup.csv"), na = "")
 readr::write_excel_csv2(base_dup, file.path(pasta_pessoal("TJSE"), "pessoal_auxiliar.csv"), na = "")
 readr::write_excel_csv2(env_dup, file.path(pasta_pessoal("TJSE"), "pessoal_auxiliar_envio.csv"), na = "")
-testServer(mod_alertas_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
     session$flushReact()
     checar("módulo monta o novo envio a partir dos arquivos da empresa", nrow(novo_envio()$dados) == 4)
     h <- paste(as.character(output$envio_csv_ui$html), collapse = "")
@@ -1046,7 +1046,7 @@ testServer(mod_alertas_server, args = list(empresa = reactive("TJSE"), ativo = r
     checar("Base de Dados não tem o botão Gerar Novo Envio", !grepl("Gerar Novo Envio", h_base, fixed = TRUE))
 })
 
-ui_pessoal <- paste(as.character(mod_alertas_ui("alertas")), collapse = "")
+ui_pessoal <- paste(as.character(mod_pessoal_auxiliar_ui("pessoal_auxiliar")), collapse = "")
 checar("abas do Pessoal e Auxiliar sem \"- Pessoal e Auxiliar\" no nome",
        all(vapply(c("Base de Dados", "Envio", "Alertas", "Inconsistências"), function(x) grepl(x, ui_pessoal, fixed = TRUE), logical(1))) &&
            !grepl("Base de Dados - Pessoal e Auxiliar</a>", ui_pessoal, fixed = TRUE) &&
@@ -1064,7 +1064,7 @@ cat("\n[L15] Pessoal e Auxiliar: aba sem arquivo (janela de aviso e filtros bloq
 erro_saida <- function(expr) tryCatch({ force(expr); NA_character_ }, error = function(e) conditionMessage(e))
 
 unlink(file.path(dir_teste, "data", "MPRO"), recursive = TRUE)
-testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
     session$setInputs(secao = "base")
     checar("Base de Dados sem arquivo abre a janela de aviso", identical(alerta_sem_arquivo_aberto(), "base"))
     session$setInputs(secao = "envio")
@@ -1085,7 +1085,7 @@ testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = r
 
 dir.create(pasta_pessoal("MPRO"), recursive = TRUE, showWarnings = FALSE)
 invisible(file.copy(base_csv, file.path(pasta_pessoal("MPRO"), "pessoal_auxiliar.csv")))
-testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
     session$setInputs(secao = "base")
     checar("Base de Dados com arquivo não abre a janela", is.null(alerta_sem_arquivo_aberto()))
     b <- filtros_bloqueados()
@@ -1095,7 +1095,7 @@ testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = r
 
 ativo_teste <- reactiveVal(FALSE)
 unlink(pasta_pessoal("MPRO"), recursive = TRUE)
-testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = ativo_teste), {
+testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("MPRO"), ativo = ativo_teste), {
     session$setInputs(secao = "envio")
     checar("módulo fechado não abre a janela", is.null(alerta_sem_arquivo_aberto()))
     ativo_teste(TRUE)
@@ -1103,10 +1103,10 @@ testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = a
     checar("abrir o módulo numa aba sem arquivo abre a janela", identical(alerta_sem_arquivo_aberto(), "envio"))
 })
 
-ui_p <- paste(as.character(mod_alertas_ui("alertas")), collapse = "")
+ui_p <- paste(as.character(mod_pessoal_auxiliar_ui("pessoal_auxiliar")), collapse = "")
 checar("blocos de filtros de Base, Envio e Alertas têm id (alvo do bloqueio)",
-       all(vapply(c("alertas-base_filtros", "alertas-envio_filtros", "alertas-alertas_filtros",
-                    "alertas-base_grafico_controles", "alertas-envio_grafico_controles"),
+       all(vapply(c("pessoal_auxiliar-base_filtros", "pessoal_auxiliar-envio_filtros", "pessoal_auxiliar-alertas_filtros",
+                    "pessoal_auxiliar-base_grafico_controles", "pessoal_auxiliar-envio_grafico_controles"),
                   function(x) grepl(sprintf('id="%s"', x), ui_p, fixed = TRUE), logical(1))))
 checar("app tem o handler que bloqueia os filtros",
        grepl("'bloquear-filtros'", codigo_app, fixed = TRUE) && grepl("selectize.disable()", codigo_app, fixed = TRUE))
@@ -1118,9 +1118,9 @@ cat("\n[12] Magistrados e Serventias: abas Base, Envio, Alertas e Inconsistênci
 pos_abas <- function(h, valores) vapply(valores, function(v) regexpr(sprintf('data-value="%s"', v), h, fixed = TRUE)[1], numeric(1))
 
 for (mod in list(
-    list(nome = "Magistrados", ui = mod_alertas_magistrados_ui, server = mod_alertas_magistrados_server,
+    list(nome = "Magistrados", ui = mod_magistrados_ui, server = mod_magistrados_server,
          pasta = pasta_magistrados, id = "mag"),
-    list(nome = "Serventias", ui = mod_alertas_serventias_ui, server = mod_alertas_serventias_server,
+    list(nome = "Serventias", ui = mod_serventias_ui, server = mod_serventias_server,
          pasta = pasta_serventias, id = "srv")
 )) {
 
@@ -1184,7 +1184,7 @@ readr::write_csv2(mag_envio, file.path(pasta_magistrados("MPRO"), "magistrados_e
 dir.create(pasta_serventias("MPRO"), recursive = TRUE, showWarnings = FALSE)
 readr::write_csv2(srv_envio, file.path(pasta_serventias("MPRO"), "serventias_envio.csv"))
 
-testServer(mod_alertas_magistrados_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+testServer(mod_magistrados_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
     session$setInputs(secao = "envio", envio_status = "Todos", envio_cargo = "Todos", envio_situacao = "Todos",
                       envio_orgao = "Todos", envio_cpf = "", envio_nome = "", envio_detalhe = "")
     checar("Magistrados: Envio com arquivo não abre a janela", is.null(alerta_sem_arquivo_aberto()))
@@ -1196,12 +1196,201 @@ testServer(mod_alertas_magistrados_server, args = list(empresa = reactive("MPRO"
     checar("Magistrados: Envio traduz o código do cargo", any(grepl("Titular", envio_exibicao()$Cargo)))
 })
 
-testServer(mod_alertas_serventias_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+testServer(mod_serventias_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
     session$setInputs(secao = "envio", envio_status = "Todos", envio_unidade = "Todos",
                       envio_entrancia = "Todos", envio_codigo = "", envio_detalhe = "")
     checar("Serventias: Envio com arquivo não abre a janela", is.null(alerta_sem_arquivo_aberto()))
     checar("Serventias: Envio carrega o arquivo de envio", nrow(dados_envio()) == 2 && nrow(dados_base()) == 0)
     checar("Serventias: tabela do Envio é exibida", identical(erro_saida(output$envio_tabela), NA_character_))
+})
+
+# =====================================================
+cat("\n[13] Magistrados e Serventias: Gerar Novo Envio e tabelas do envio\n")
+# =====================================================
+
+# Magistrados: alerta "cargos distintos ativos" (como vem do MPM).
+mag_base_ne <- data.frame(
+    CPF = c("00979548535", "00979548535", "00979548535", "11111111111", "22222222222", "33333333333"),
+    Nome = c("JAIR", "JAIR", "JAIR", "ANA", "BRUNO", "CARLA"),
+    `Órgão de lotação do magistrado(a)` = c("32", "32", "8673", "10", "20", "30"),
+    Cargo = c("2", "2", "1", "2", "2", "2"),
+    `Situação profissional atual` = c("8", "10", "8", "8", "10", "8"),
+    `Data de início da situação` = c("17/10/2018", "18/01/2025", "14/09/2026", "01/01/2020", "01/01/2020", "01/01/2020"),
+    `Data de saída da situação` = c("", "", "", "", "", "01/06/2026"),
+    Status = c("Ativo", "Inativo", "Ativo", "Ativo", "Inativo", "Inativo"),
+    `Exclusão de registro por erro` = "N",
+    check.names = FALSE
+)
+mag_envio_ne <- data.frame(
+    CPF = c("979548535", "11111111111", "22222222222", "33333333333", "44444444444"),
+    Nome = c("JAIR", "ANA", "BRUNO", "CARLA", "DIEGO"),
+    `Órgão de lotação do magistrado(a)` = c("8404", "10", "20", "30", "40"),
+    Cargo = c("1", "2", "1", "1", "1"),
+    `Situação profissional atual` = c("8", "16", "8", "8", "8"),
+    `Data de início da situação` = c("46279", "01/09/2026", "01/09/2026", "01/09/2026", "01/09/2026"),
+    `Data de saída da situação` = "",
+    `Exclusão de registro por erro` = "N",
+    check.names = FALSE
+)
+mag_alertas_ne <- data.frame(
+    CPF = c("00979548535", "11111111111", "22222222222", "33333333333", "55555555555", "66666666666"),
+    Nome = "x",
+    `Alerta: Inconsistência` = c(rep("Há cargos distintos ativos para o mesmo CPF informado. Favor verificar...", 5), NA),
+    `Alerta: Email` = c(NA, NA, NA, NA, NA, "E-mail inválido"),
+    check.names = FALSE
+)
+rm_ <- gerar_novo_envio_magistrados(mag_envio_ne, mag_base_ne, mag_alertas_ne)
+dm <- rm_$dados
+checar("Magistrados: CPFs com o alerta \"cargos distintos ativos\" (com e sem zero à esquerda)",
+       setequal(rm_$cpfs_conflito, c("00979548535", "11111111111", "22222222222", "33333333333", "55555555555")))
+checar("Magistrados: alerta de outro tipo não entra", !("66666666666" %in% rm_$cpfs_conflito))
+checar("Magistrados: duas linhas só para quem tem registro em aberto de outro cargo (JAIR)",
+       nrow(dm) == 2 && identical(dm$Nome, c("JAIR", "JAIR")))
+checar("Magistrados: 1ª linha é o registro em aberto de outro cargo (cargo 2, 2018), não o encerrado (situação 10)",
+       dm$Cargo[1] == "2" && dm$`Data de início da situação`[1] == "17/10/2018" && dm$`Situação profissional atual`[1] == "8")
+checar("Magistrados: 1ª linha recebe Data de saída = início do envio (serial do Excel em dd/mm/aaaa)",
+       dm$`Data de saída da situação`[1] == format(as.Date(46279, origin = "1899-12-30"), "%d/%m/%Y"))
+checar("Magistrados: 2ª linha é o envio sem alteração (datas em dd/mm/aaaa)",
+       dm$CPF[2] == "979548535" && dm$Cargo[2] == "1" && dm$`Órgão de lotação do magistrado(a)`[2] == "8404")
+checar("Magistrados: novo envio tem as colunas do envio (sem Status da base)", identical(names(dm), names(mag_envio_ne)))
+checar("Magistrados: mesmo cargo, registro encerrado ou já com saída não geram linhas (ANA, BRUNO, CARLA)",
+       setequal(rm_$sem_base, c("11111111111", "22222222222", "33333333333")))
+checar("Magistrados: CPF com alerta fora do envio é informado", identical(rm_$sem_envio, "55555555555"))
+checar("Magistrados: alerta de conflito de duplicidade também conta",
+       identical(cpfs_com_duplicidade_magistrados(data.frame(CPF = "1", `Conflito: Duplicidade no próprio Tribunal` = "x",
+                                                            check.names = FALSE)), "00000000001"))
+
+checar("Magistrados: arquivo sem Status (gerado pelo órgão) é reconhecido como envio",
+       identical(identificar_tipo_arquivo_magistrados(mag_envio_ne, "Magistrados_i.xlsx"), "envio") &&
+           identical(identificar_tipo_arquivo_magistrados(mag_base_ne, "Magistrados_i.xlsx"), "base"))
+
+# Serventias: linhas do envio das serventias com alerta.
+srv_envio_ne <- data.frame(`Código Serventia` = c("18160", "18169", "18130"), CEP = c("49580970", "49650000", "49690000"),
+                           `Data Adesão` = c("44533", "03/12/2021", ""), `Entrância` = c("2", "1", "2"), check.names = FALSE)
+srv_alertas_ne <- data.frame(`Código Serventia` = c("18160", "018130", "99999", "18169"),
+                             `Alerta: Geolocalização` = c("Fora do município", "x", "y", NA), check.names = FALSE)
+rs_ <- gerar_novo_envio_serventias(srv_envio_ne, srv_alertas_ne)
+checar("Serventias: novo envio só com as serventias que têm alerta (código com/sem zero à esquerda)",
+       identical(rs_$dados$`Código Serventia`, c("18160", "18130")))
+checar("Serventias: colunas do envio, data serial em dd/mm/aaaa",
+       identical(names(rs_$dados), names(srv_envio_ne)) && rs_$dados$`Data Adesão`[1] == "03/12/2021")
+checar("Serventias: código com alerta fora do envio é informado", identical(rs_$sem_envio, "99999"))
+checar("Serventias: arquivo sem Status (gerado pelo órgão) é reconhecido como envio",
+       identical(identificar_tipo_arquivo_serventias(srv_envio_ne, "serventias_i.xlsx"), "envio"))
+
+# Pelo módulo: tabelas do envio e botão.
+unlink(file.path(dir_teste, "data", "TJSE", "magistrados"), recursive = TRUE)
+unlink(file.path(dir_teste, "data", "TJSE", "serventias"), recursive = TRUE)
+dir.create(pasta_magistrados("TJSE"), recursive = TRUE, showWarnings = FALSE)
+dir.create(pasta_serventias("TJSE"), recursive = TRUE, showWarnings = FALSE)
+readr::write_excel_csv2(mag_base_ne, file.path(pasta_magistrados("TJSE"), "magistrados.csv"), na = "")
+readr::write_excel_csv2(mag_envio_ne, file.path(pasta_magistrados("TJSE"), "magistrados_envio.csv"), na = "")
+readr::write_excel_csv2(mag_alertas_ne, file.path(pasta_magistrados("TJSE"), "alertas_magistrados.csv"), na = "")
+readr::write_excel_csv2(
+    data.frame(`Código Serventia` = c("8404", "32"), `Nome Serventia` = c("1ª VARA CÍVEL", "TRIBUNAL"), CEP = "49000000",
+               Status = "Ativo", check.names = FALSE),
+    file.path(pasta_serventias("TJSE"), "serventias.csv"), na = "")
+readr::write_excel_csv2(srv_envio_ne, file.path(pasta_serventias("TJSE"), "serventias_envio.csv"), na = "")
+readr::write_excel_csv2(srv_alertas_ne, file.path(pasta_serventias("TJSE"), "alertas_serventias.csv"), na = "")
+limpar_cache_arquivos()
+
+testServer(mod_magistrados_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "envio", envio_status = "Todos", envio_cargo = "Todos", envio_situacao = "Todos",
+                      envio_orgao = "Todos", envio_cpf = "", envio_nome = "", envio_detalhe = "")
+    checar("Magistrados (módulo): novo envio montado dos arquivos da empresa", nrow(novo_envio()$dados) == 2)
+    h <- paste(as.character(output$novo_envio_ui$html), collapse = "")
+    checar("Magistrados (módulo): botão Gerar Novo Envio ativo", grepl("novo_envio_download", h, fixed = TRUE))
+    d <- ler_arquivo_dados(output$novo_envio_download, "csv")
+    checar("Magistrados (módulo): download traz as duas linhas", nrow(d) == 2 && d$Cargo[1] == "2")
+    checar("Magistrados (módulo): tabela do Envio mostra o órgão com o nome da serventia e o cargo por extenso",
+           any(envio_exibicao()$`Órgão de lotação do magistrado(a)` == "8404 - 1ª VARA CÍVEL") &&
+               any(grepl("Titular", envio_exibicao()$Cargo)))
+    h_csv <- paste(as.character(output$envio_csv_ui$html), collapse = "")
+    checar("Magistrados (módulo): aba CSV do Envio tem o Gerar Novo Envio, a da Base não",
+           grepl("novo_envio_ui", h_csv, fixed = TRUE) &&
+               !grepl("novo_envio_ui", paste(as.character(output$base_csv_ui$html), collapse = ""), fixed = TRUE))
+})
+
+testServer(mod_serventias_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "envio", envio_status = "Todos", envio_unidade = "Todos",
+                      envio_entrancia = "Todos", envio_codigo = "", envio_detalhe = "")
+    checar("Serventias (módulo): novo envio com as serventias com alerta", nrow(novo_envio()$dados) == 2)
+    d <- ler_arquivo_dados(output$novo_envio_download, "csv")
+    checar("Serventias (módulo): download traz as linhas do envio", nrow(d) == 2)
+    checar("Serventias (módulo): aba CSV do Envio tem o Gerar Novo Envio",
+           grepl("novo_envio_ui", paste(as.character(output$envio_csv_ui$html), collapse = ""), fixed = TRUE))
+})
+
+# =====================================================
+cat("\n[14] Tabelas de referência (municípios, competências, classificação de unidades)\n")
+# =====================================================
+
+checar("módulos com os nomes novos (mod_pessoal_auxiliar, mod_magistrados, mod_serventias)",
+       all(file.exists(file.path(dir_teste, "modules", c("mod_pessoal_auxiliar.R", "mod_magistrados.R", "mod_serventias.R")))) &&
+           !any(file.exists(file.path(dir_teste, "modules", c("mod_alertas.R", "mod_alertas_magistrados.R", "mod_alertas_serventias.R")))) &&
+           !grepl("mod_alertas", codigo_app, fixed = TRUE))
+n_tab <- function(t) dbGetQuery(con, sprintf("SELECT COUNT(*) n FROM %s", t))$n
+checar("tabelas de referência criadas e preenchidas a partir dos CSVs",
+       n_tab("tab_municipio") == 75 && n_tab("tab_competencia") == 39 &&
+           n_tab("tab_classificacao_unidade") == 46 && n_tab("tab_tipo_unidade") == 4)
+checar("vetores de referência carregados para a aplicação",
+       unname(REF_MUNICIPIOS["366"]) == "AREIA BRANCA" && unname(REF_COMPETENCIAS["1"]) == "Juízo Único" &&
+           unname(REF_CLASSIFICACOES_UNIDADE["109"]) == "PA - Postos Avançados")
+checar("vários códigos na mesma célula, zero à esquerda e código desconhecido",
+       identical(codigos_para_nomes(c("366, 1546", "0291", "9999", NA, ""), REF_MUNICIPIOS),
+                 c("AREIA BRANCA; DIVINA PASTORA", "ARACAJU", "9999", NA, "")))
+invisible(dbExecute(con, "UPDATE tab_competencia SET descricao = 'Vara Única' WHERE codigo = 1"))
+carregar_tabelas_referencia(con)
+checar("ajuste no banco é preservado (o CSV não sobrescreve)", unname(REF_COMPETENCIAS["1"]) == "Vara Única")
+invisible(dbExecute(con, "UPDATE tab_competencia SET descricao = 'Juízo Único' WHERE codigo = 1"))
+carregar_tabelas_referencia(con)
+
+srv_ref <- data.frame(
+    `Código Serventia` = c("18160", "18169"), CEP = c("49580970", "49650000"),
+    `Juizo 100% Digital` = c("S", "N"), `Tipo de Unidade Judiciária` = c("UJ1", "uj2"),
+    `Classificação da Unidade Judiciária` = c("109", "201"), `Municípios Abrangidos` = c("366", "1546;291"),
+    `Competências` = c("1", "2, 3"), `Entrância` = c("2", "1"), `Balcão Virtual` = c("S", ""),
+    check.names = FALSE
+)
+t_ref <- traduzir_referencias_serventias(srv_ref)
+checar("Serventias: município, competência, tipo e classificação por nome; S/N vira Sim/Não",
+       identical(t_ref$`Municípios Abrangidos`, c("AREIA BRANCA", "DIVINA PASTORA; ARACAJU")) &&
+           identical(t_ref$`Competências`, c("Juízo Único", "Cível; Criminal")) &&
+           identical(t_ref$`Tipo de Unidade Judiciária`, c("Unidade Judiciária de 1º grau",
+                                                           "Unidade Judiciária de 2º grau ou de tribunal superior")) &&
+           grepl("^Gab2", t_ref$`Classificação da Unidade Judiciária`[2]) &&
+           identical(t_ref$`Juizo 100% Digital`, c("Sim", "Não")) && identical(t_ref$`Balcão Virtual`, c("Sim", "")))
+checar("Serventias: CEP, código e entrância continuam como no arquivo",
+       identical(t_ref$CEP, srv_ref$CEP) && identical(t_ref$`Código Serventia`, srv_ref$`Código Serventia`) &&
+           identical(t_ref$`Entrância`, srv_ref$`Entrância`))
+
+unlink(file.path(dir_teste, "data", "MPRO"), recursive = TRUE)
+dir.create(pasta_serventias("MPRO"), recursive = TRUE, showWarnings = FALSE)
+readr::write_excel_csv2(srv_ref, file.path(pasta_serventias("MPRO"), "serventias_envio.csv"), na = "")
+readr::write_excel_csv2(data.frame(`Código Serventia` = "18169", `Alerta: Competência` = "x", check.names = FALSE),
+                        file.path(pasta_serventias("MPRO"), "alertas_serventias.csv"), na = "")
+limpar_cache_arquivos()
+testServer(mod_serventias_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "envio", envio_status = "Todos", envio_unidade = "Todos",
+                      envio_entrancia = "Todos", envio_codigo = "", envio_detalhe = "")
+    checar("Serventias (módulo): tabela do Envio com nomes",
+           any(envio_exibicao()$`Municípios Abrangidos` == "AREIA BRANCA"))
+    session$setInputs(envio_detalhe = "divina")
+    session$elapse(500)
+    checar("Serventias (módulo): Detalhe encontra pelo nome do município", nrow(dados_envio_filtrados()) == 1)
+    session$setInputs(envio_detalhe = "", envio_grafico_agrupar = "Município abrangido")
+    session$elapse(500)
+    r <- resumo_agrupamento_serventias(envio_exibicao(), "Município abrangido")
+    checar("Serventias (módulo): gráfico por Município abrangido (um grupo por município)",
+           setequal(r$Grupo, c("AREIA BRANCA", "DIVINA PASTORA", "ARACAJU")) && all(r$Quantidade == 1))
+    checar("Serventias (módulo): gráfico por Competência e por CEP",
+           setequal(resumo_agrupamento_serventias(envio_exibicao(), "Competência")$Grupo, c("Juízo Único", "Cível", "Criminal")) &&
+               setequal(resumo_agrupamento_serventias(envio_exibicao(), "CEP")$Grupo, c("49580-970", "49650-000")))
+    d <- ler_arquivo_dados(output$envio_download_csv, "csv")
+    checar("Serventias (módulo): CSV da tabela sai com os nomes", "AREIA BRANCA" %in% d$`Municípios Abrangidos`)
+    n <- novo_envio()$dados
+    checar("Serventias (módulo): Gerar Novo Envio continua com os códigos",
+           nrow(n) == 1 && n$`Municípios Abrangidos` == "1546;291" && n$`Competências` == "2, 3")
 })
 
 # =====================================================

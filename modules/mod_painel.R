@@ -33,7 +33,7 @@
 # Os gráficos são HTML/CSS puro (sem pacote de gráficos), para não
 # acrescentar dependência ao deploy.
 #
-# Depende de funções de mod_alertas.R e mod_alertas_magistrados.R — por
+# Depende de funções de mod_pessoal_auxiliar.R e mod_magistrados.R — por
 # isso é carregado depois deles no app.R.
 # =====================================================
 
@@ -55,8 +55,8 @@ local({
 
     if (length(faltando) > 0) {
         stop(
-            "mod_painel.R precisa ser carregado depois de mod_alertas.R e ",
-            "mod_alertas_magistrados.R. Não encontrado: ",
+            "mod_painel.R precisa ser carregado depois de mod_pessoal_auxiliar.R e ",
+            "mod_magistrados.R. Não encontrado: ",
             paste(faltando, collapse = ", ")
         )
     }
