@@ -153,6 +153,52 @@ nome_arquivo_seguro <- function(nome, extensao = c("csv", "xlsx")) {
 }
 
 # =====================================================
+# GRAVAÇÃO SEGURA DE UM ARQUIVO ENVIADO
+# -----------------------------------------------------
+# Copia `origem` para `destino` e só DEPOIS apaga os `anteriores` (ex.:
+# o serventias.xlsx antigo quando chega um serventias.csv). Antes, os
+# módulos apagavam o anterior primeiro: se a cópia falhasse, a base da
+# empresa sumia. A cópia vai para um nome temporário oculto na mesma
+# pasta e é renomeada no fim, então quem ler a pasta no meio do processo
+# nunca vê um arquivo pela metade.
+# Devolve TRUE se o arquivo novo ficou gravado. (Mesma função do
+# FarolJus Lite, usada pelos módulos de dados.)
+# =====================================================
+
+gravar_arquivo_substituindo <- function(origem, destino, anteriores = character(0)) {
+    
+    pasta <- dirname(destino)
+    temporario <- file.path(pasta, paste0(".enviando_", basename(destino)))
+    
+    if (!isTRUE(file.copy(origem, temporario, overwrite = TRUE))) {
+        unlink(temporario)
+        return(FALSE)
+    }
+    
+    a_remover <- setdiff(normalizePath(anteriores, mustWork = FALSE),
+                         normalizePath(destino, mustWork = FALSE))
+    a_remover <- a_remover[file.exists(a_remover)]
+    if (length(a_remover) > 0) {
+        file.remove(a_remover)
+    }
+    
+    if (file.exists(destino)) {
+        file.remove(destino)
+    }
+    
+    ok <- isTRUE(file.rename(temporario, destino))
+    
+    if (!ok) {
+        # file.rename pode falhar entre dispositivos; tenta copiar.
+        ok <- isTRUE(file.copy(temporario, destino, overwrite = TRUE))
+        unlink(temporario)
+    }
+    
+    ok
+    
+}
+
+# =====================================================
 # CACHE DE ARQUIVOS LIDOS (compartilhado entre as sessões)
 # -----------------------------------------------------
 # Ler e limpar as planilhas do MPM/CNJ é a parte mais lenta do app (o
