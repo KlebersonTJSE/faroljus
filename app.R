@@ -144,12 +144,19 @@ source(here::here("R", "auth_totp.R"))
 source(here::here("R", "database.R"))
 source(here::here("modules", "mod_totp_admin.R"))
 
+# Módulos de dados, Inconsistências e Painel — os mesmos do FarolJus
+# Lite (com o cache de leitura e a carga sob demanda do FarolJus). A
+# ordem importa: Serventias, Magistrados e Painel reaproveitam funções de
+# mod_alertas.R e mod_inconsistencias.R; o Painel usa os três.
 source(here::here("modules", "mod_alertas.R"))
-# Precisa vir DEPOIS de mod_alertas.R: reaproveita funções definidas lá
-# (caminho_alertas(), SUBPASTA_SERVENTIAS, ler_arquivo_alertas()...).
+source(here::here("modules", "mod_inconsistencias.R"))
 source(here::here("modules", "mod_alertas_serventias.R"))
-# Também depende de mod_alertas.R (SUBPASTA_MAGISTRADOS, funções genéricas).
 source(here::here("modules", "mod_alertas_magistrados.R"))
+source(here::here("modules", "mod_painel.R"))
+
+# Tabelas de códigos do MPM no SQLite (editáveis no banco) — ver
+# R/tabelas_auxiliares.R. Depois dos módulos, que definem os padrões.
+source(here::here("R", "tabelas_auxiliares.R"))
 
 # =========================================================================
 # MÓDULOS (valores internos do navset "menu")
@@ -169,6 +176,10 @@ MENU_IDS <- setNames(c("ir_magistrados", "ir_pessoal", "ir_serventias"), MENU_MO
 MENU_ICONES <- setNames(c("gavel", "users", "building-columns"), MENU_MODULOS)
 MENU_ROTULOS <- setNames(c("Magistrados", "Pessoal e Auxiliar", "Serventias"), MENU_MODULOS)
 
+# Painel (indicadores de Magistrados e Servidores): item próprio do menu,
+# logo acima de Configurações, como no FarolJus Lite.
+ABA_PAINEL <- "Painel"
+
 ABA_INICIAL <- MENU_MODULOS[1]
 
 # =========================================================================
@@ -180,20 +191,83 @@ ABA_INICIAL <- MENU_MODULOS[1]
 # =========================================================================
 garantir_schema_totp(con)
 
-# Tabelas auxiliares (Situação Profissional / Cargo de servidores e
-# magistrados): criadas e semeadas UMA vez por processo, aqui, em vez de
-# a cada sessão aberta (antes eram ~40 INSERTs no SQLite a cada acesso
-# à tela de login). As funções vêm de mod_alertas.R e
-# mod_alertas_magistrados.R; um erro não derruba o app — sem as tabelas,
-# os códigos só aparecem como vieram no arquivo.
-tryCatch(
-    garantir_tabelas_auxiliares(con),
-    error = function(e) warning("Não foi possível preparar as tabelas auxiliares: ", conditionMessage(e))
-)
-tryCatch(
-    garantir_tabelas_auxiliares_magistrados(con),
-    error = function(e) warning("Não foi possível preparar as tabelas auxiliares de magistrados: ", conditionMessage(e))
-)
+# Tabelas auxiliares (códigos do MPM): criadas e semeadas UMA vez por
+# processo, numa transação, e lidas para as constantes usadas pelos
+# módulos — ver R/tabelas_auxiliares.R.
+carregar_tabelas_auxiliares(con)
+
+# =========================================================================
+# MIGRAÇÃO DAS PASTAS DE PESSOAL E AUXILIAR (layout antigo -> Lite)
+# -------------------------------------------------------------------------
+# O módulo Pessoal e Auxiliar agora segue o layout do FarolJus Lite:
+#   <PASTA_ALERTAS>/<EMPRESA>/pessoal_auxiliar/pessoal_auxiliar.xlsx (base)
+#   <PASTA_ALERTAS>/<EMPRESA>/alertas_csv/<arquivos de alertas>
+# Antes, tudo ficava em <EMPRESA>/pessoal/ (base como
+# quadro_pessoal_auxiliar.*). Na inicialização, se a pasta antiga existir,
+# os arquivos são COPIADOS para o lugar novo (sem sobrescrever nada que
+# já esteja lá) e a pasta antiga é renomeada para
+# pessoal_migrado_<data> — nada é apagado, e a cópia não se repete.
+# =========================================================================
+migrar_pastas_pessoal <- function(raiz = PASTA_ALERTAS_BASE) {
+    
+    if (!dir.exists(raiz)) {
+        return(invisible(NULL))
+    }
+    
+    for (pasta_antiga in file.path(list.dirs(raiz, recursive = FALSE), "pessoal")) {
+        
+        if (!dir.exists(pasta_antiga)) {
+            next
+        }
+        
+        empresa_dir <- dirname(pasta_antiga)
+        
+        tryCatch({
+            
+            arquivos <- list.files(pasta_antiga, full.names = TRUE)
+            arquivos <- arquivos[extensao_arquivo(arquivos) %in% EXTENSOES_PLANILHA]
+            arquivos <- arquivos[!grepl("^(~\\$|\\.~lock)", basename(arquivos))]
+            
+            eh_base <- normalizar_nome_arquivo(arquivos) %in%
+                c("quadro_pessoal_auxiliar", "quadro_pessoal_e_auxiliar")
+            
+            pasta_base <- file.path(empresa_dir, SUBPASTA_PESSOAL)
+            pasta_alertas <- file.path(empresa_dir, SUBPASTA_ALERTAS)
+            dir.create(pasta_base, recursive = TRUE, showWarnings = FALSE)
+            dir.create(pasta_alertas, recursive = TRUE, showWarnings = FALSE)
+            
+            for (arq in arquivos[eh_base][1]) {
+                if (is.na(arq)) next
+                destino <- file.path(pasta_base, paste0(RADICAL_BASE_PESSOAL, ".", extensao_arquivo(arq)))
+                if (length(arquivos_base_pessoal(pasta_base)) == 0) {
+                    file.copy(arq, destino, copy.date = TRUE)
+                }
+            }
+            
+            for (arq in arquivos[!eh_base]) {
+                destino <- file.path(pasta_alertas, basename(arq))
+                if (!file.exists(destino)) {
+                    file.copy(arq, destino, copy.date = TRUE)
+                }
+            }
+            
+            renomeada <- file.path(empresa_dir, paste0("pessoal_migrado_", format(Sys.Date(), "%Y%m%d")))
+            if (file.rename(pasta_antiga, renomeada)) {
+                message("Pessoal e Auxiliar: arquivos de ", pasta_antiga,
+                        " copiados para o novo layout; pasta antiga renomeada para ", renomeada, ".")
+            }
+            
+        }, error = function(e) {
+            warning("Não foi possível migrar ", pasta_antiga, ": ", conditionMessage(e))
+        })
+        
+    }
+    
+    invisible(NULL)
+    
+}
+
+migrar_pastas_pessoal()
 
 # Quem é administrador (Administração TOTP e Trocar empresa). Sem
 # ADMINS_AD no .Renviron, vale a regra antiga: QUALQUER login AD
@@ -430,6 +504,37 @@ ui <- fluidPage(
 
       .metodo-opcoes .radio {
         margin-bottom: .85rem;
+      }
+
+      /* LOGIN CORPORATIVO e CÓDIGO AUTHENTICATOR LADO A LADO quando há
+         espaço: o cartão do passo 1 fica mais largo e as duas opções
+         dividem a linha (cada uma com no mínimo 220px). Em tela estreita
+         (celular), não cabem as duas e cada uma ocupa a linha inteira,
+         uma embaixo da outra, como antes. */
+
+      .login-card.login-card-larga {
+        max-width: 640px;
+      }
+
+      .metodo-opcoes .shiny-options-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .85rem;
+        margin-bottom: .85rem;
+      }
+
+      .metodo-opcoes .shiny-options-group .radio {
+        flex: 1 1 220px;
+        margin: 0;
+        display: flex;
+      }
+
+      .metodo-opcoes .shiny-options-group .radio label {
+        height: 100%;
+      }
+
+      .metodo-opcoes .shiny-input-container {
+        width: 100%;
       }
 
       .metodo-opcoes .radio label {
@@ -719,6 +824,241 @@ ui <- fluidPage(
 
       .icon-bar.expandida .icon-seta {
         display: inline;
+      }
+
+      /* =============================================
+         BARRA DE ROLAGEM EM CIMA DAS TABELAS
+         — uma faixa só com a barra horizontal, logo acima do
+         cabeçalho, espelhando a barra nativa de baixo (ver o script
+         'rolagem dupla' em tags$head). Some quando a tabela cabe na
+         largura.
+         ============================================= */
+
+      .dt-rolagem-topo {
+        overflow-x: auto;
+        overflow-y: hidden;
+        height: 14px;
+        margin-bottom: 4px;
+      }
+
+      .dt-rolagem-topo > div {
+        height: 1px;
+      }
+
+      .dt-rolagem-topo.sem-rolagem {
+        display: none;
+      }
+
+      /* As duas barras (em cima e embaixo) com o mesmo visual e sempre
+         visíveis — sem isso, alguns navegadores só mostram a barra
+         enquanto se rola. */
+      .dt-rolagem-topo,
+      .dataTables_scrollBody {
+        scrollbar-width: thin;
+        scrollbar-color: #9aa5b1 #eef1f4;
+      }
+
+      .dt-rolagem-topo::-webkit-scrollbar,
+      .dataTables_scrollBody::-webkit-scrollbar {
+        height: 10px;
+      }
+
+      .dt-rolagem-topo::-webkit-scrollbar-track,
+      .dataTables_scrollBody::-webkit-scrollbar-track {
+        background: #eef1f4;
+        border-radius: 5px;
+      }
+
+      .dt-rolagem-topo::-webkit-scrollbar-thumb,
+      .dataTables_scrollBody::-webkit-scrollbar-thumb {
+        background: #9aa5b1;
+        border-radius: 5px;
+      }
+
+      .dt-rolagem-topo::-webkit-scrollbar-thumb:hover,
+      .dataTables_scrollBody::-webkit-scrollbar-thumb:hover {
+        background: #6c7a89;
+      }
+
+      /* =============================================
+         JANELA 'PROCESSANDO O PAINEL' — aberta no navegador ao clicar
+         em Painel e fechada quando os indicadores estão prontos (ver
+         farolPainelProcessando(), no script abaixo).
+         ============================================= */
+
+      .painel-processando {
+        position: fixed;
+        inset: 0;
+        z-index: 2000;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(15, 23, 42, .45);
+      }
+
+      .painel-processando.aberta {
+        display: flex;
+      }
+
+      .painel-processando-caixa {
+        background: #fff;
+        border-radius: 1rem;
+        box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, .25);
+        padding: 1.75rem 2rem;
+        max-width: 440px;
+        width: calc(100% - 32px);
+        text-align: center;
+      }
+
+      .painel-processando-icone {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        margin: 0 auto 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #003366, #0d6efd);
+        color: #fff;
+        font-size: 1.4rem;
+      }
+
+      .painel-processando-titulo {
+        font-weight: 700;
+        font-size: 1.1rem;
+        color: #003366;
+        margin-bottom: .35rem;
+      }
+
+      .painel-processando-texto {
+        font-size: .88rem;
+        color: #6c757d;
+        margin-bottom: 1.1rem;
+      }
+
+      .painel-processando-barra {
+        height: 6px;
+        border-radius: 3px;
+        background: #e7eef7;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .painel-processando-barra::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 35%;
+        border-radius: 3px;
+        background: #0d6efd;
+        animation: painel-processando-anda 1.1s ease-in-out infinite;
+      }
+
+      @keyframes painel-processando-anda {
+        from { left: -35%; }
+        to   { left: 100%; }
+      }
+
+      /* =============================================
+         FILTROS BLOQUEADOS (aba sem arquivo) e JANELA DE AVISO
+         'nenhum arquivo para exibir' — ver o handler JS
+         'bloquear-filtros', abaixo, e mostrar_alerta_sem_arquivo(),
+         em mod_alertas.R.
+         ============================================= */
+
+      .al-filtros-aviso {
+        display: none;
+        align-items: center;
+        font-size: .82rem;
+        color: #664d03;
+        background: #fff8e1;
+        border: 1px solid #ffe69c;
+        border-radius: .6rem;
+        padding: .45rem .75rem;
+        margin-bottom: .9rem;
+      }
+
+      .filtros-bloqueados .al-filtros-aviso {
+        display: flex;
+      }
+
+      .filtros-bloqueados .form-control,
+      .filtros-bloqueados .form-select,
+      .filtros-bloqueados .selectize-input,
+      .filtros-bloqueados .btn,
+      .filtros-bloqueados .control-label {
+        opacity: .55;
+        cursor: not-allowed !important;
+      }
+
+      .filtros-bloqueados .selectize-input,
+      .filtros-bloqueados .form-control {
+        background: #f1f3f5 !important;
+      }
+
+      .modal-dialog:has(.al-sem-arquivo) {
+        display: flex;
+        align-items: center;
+        min-height: calc(100% - 3.5rem);
+      }
+
+      .modal-content:has(.al-sem-arquivo) {
+        border-radius: 1rem;
+        border: 0;
+        box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, .25);
+      }
+
+      .modal-content:has(.al-sem-arquivo) .modal-footer {
+        justify-content: center;
+        border-top: 0;
+        padding-top: 0;
+        padding-bottom: 1.5rem;
+      }
+
+      .al-sem-arquivo {
+        text-align: center;
+        padding: 1rem .5rem 0;
+      }
+
+      .al-sem-arquivo-icone {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        margin: 0 auto 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #b8860b, #f0ad4e);
+        color: #fff;
+        font-size: 1.4rem;
+      }
+
+      .al-sem-arquivo-titulo {
+        font-weight: 700;
+        font-size: 1.1rem;
+        color: #003366;
+        margin-bottom: .5rem;
+      }
+
+      .al-sem-arquivo-texto {
+        font-size: .9rem;
+        color: #495057;
+        margin-bottom: .75rem;
+      }
+
+      .al-sem-arquivo-nota {
+        font-size: .8rem;
+        color: #6c757d;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .painel-processando-barra::after {
+          animation: none;
+          left: 0;
+          width: 100%;
+          opacity: .5;
+        }
       }
 
       #app-content {
@@ -1078,6 +1418,224 @@ ui <- fluidPage(
 
       );
 
+      // =================================================
+      // JANELA 'PROCESSANDO O PAINEL'
+      // -------------------------------------------------
+      // Aberta no próprio navegador, no clique do item Painel do menu:
+      // o servidor só manda mensagens ao fim do processamento, então
+      // uma janela aberta por ele só apareceria com tudo pronto. Fecha
+      // quando o servidor terminou (html sem .shiny-busy) e o conteúdo
+      // do painel está desenhado (sem .recalculating), depois de um
+      // tempo mínimo para não 'piscar'. Fecha de qualquer jeito depois
+      // de PAINEL_ESPERA_MAX_MS.
+      // =================================================
+      var PAINEL_MIN_MS = 600;
+      var PAINEL_ESPERA_MAX_MS = 120000;
+      var painelVerificacao = null;
+
+      // =================================================
+      // FILTROS BLOQUEADOS (aba sem arquivo)
+      // -------------------------------------------------
+      // Enviado pelos módulos com {ids, bloqueado}: marca cada bloco
+      // (.filtros-bloqueados) e desabilita os campos, os botões e as
+      // listas (selectize). O estado é guardado e reaplicado quando um
+      // campo é atualizado ou criado, ou uma aba aparece — senão um
+      // updateSelectInput() ou a criação tardia da lista o desfaria.
+      // =================================================
+      (function() {
+
+        var estado = {};
+
+        function aplicar(id) {
+          var el = document.getElementById(id);
+          if (!el) return;
+          var b = !!estado[id];
+          el.classList.toggle('filtros-bloqueados', b);
+          el.setAttribute('aria-disabled', b ? 'true' : 'false');
+          el.querySelectorAll('input, button, textarea, select').forEach(function(c) {
+            if (b) c.setAttribute('disabled', 'disabled'); else c.removeAttribute('disabled');
+          });
+          el.querySelectorAll('select').forEach(function(s) {
+            if (s.selectize) { if (b) s.selectize.disable(); else s.selectize.enable(); }
+          });
+        }
+
+        function aplicarTodos() {
+          Object.keys(estado).forEach(aplicar);
+        }
+
+        Shiny.addCustomMessageHandler('bloquear-filtros', function(m) {
+          [].concat(m.ids).forEach(function(id) {
+            estado[id] = m.bloqueado;
+            aplicar(id);
+          });
+          setTimeout(aplicarTodos, 300);
+          setTimeout(aplicarTodos, 1200);
+        });
+
+        $(document).on('shiny:updateinput shiny:bound shown.bs.tab', function() {
+          setTimeout(aplicarTodos, 0);
+        });
+
+      })();
+
+      window.farolPainelProcessando = function() {
+
+        var janela = document.getElementById('painel-processando');
+        if (!janela) return;
+
+        janela.classList.add('aberta');
+        janela.setAttribute('aria-hidden', 'false');
+
+        var inicio = Date.now();
+        clearInterval(painelVerificacao);
+
+        painelVerificacao = setInterval(function() {
+
+          var decorrido = Date.now() - inicio;
+          var saida = document.getElementById('painel-conteudo');
+          var pronto = saida &&
+            saida.children.length > 0 &&
+            !saida.classList.contains('recalculating') &&
+            !document.documentElement.classList.contains('shiny-busy');
+
+          if ((pronto && decorrido >= PAINEL_MIN_MS) || decorrido >= PAINEL_ESPERA_MAX_MS) {
+            clearInterval(painelVerificacao);
+            janela.classList.remove('aberta');
+            janela.setAttribute('aria-hidden', 'true');
+          }
+
+        }, 150);
+
+      };
+
+      // =================================================
+      // ROLAGEM DUPLA NAS TABELAS (barra em cima e embaixo)
+      // -------------------------------------------------
+      // Vale para TODAS as tabelas DT com rolagem horizontal
+      // (scrollX = TRUE), dos módulos e da administração, sem mudar o
+      // código de cada uma. Quando uma tabela é desenhada, uma faixa
+      // .dt-rolagem-topo é inserida acima do cabeçalho, com a mesma
+      // largura de conteúdo da tabela; rolar uma das barras move a
+      // outra. A largura é recalculada sempre que a tabela muda de
+      // tamanho (filtro, página, coluna, aba que fica visível,
+      // janela redimensionada) — tabelas em abas ocultas têm largura
+      // 0 até serem exibidas.
+      // =================================================
+      (function() {
+
+        // =================================================
+        // CABEÇALHO ALINHADO AOS DADOS
+        // -------------------------------------------------
+        // Com scrollX, o DataTables desenha o cabeçalho numa tabela à
+        // parte e só calcula a largura das colunas ao criar a tabela.
+        // Quando a largura da área muda depois (menu recolhido/expandido,
+        // janela redimensionada, aba ou tela que fica visível), o título
+        // de cada coluna saía de cima dos seus dados. columns.adjust()
+        // recalcula as larguras das tabelas visíveis; o ResizeObserver
+        // (abaixo, em preparar()) chama isto sempre que a largura de uma
+        // tabela muda, com uma pequena espera para agrupar os eventos.
+        // =================================================
+        var esperaAjuste = null;
+        function ajustarColunas() {
+          clearTimeout(esperaAjuste);
+          esperaAjuste = setTimeout(function() {
+            if (!$.fn.dataTable) return;
+            $.fn.dataTable.tables({ visible: true, api: true }).columns.adjust();
+          }, 120);
+        }
+        window.farolAjustarColunas = ajustarColunas;
+
+        function ajustar(topo, corpo) {
+          var interno = topo.firstChild;
+          interno.style.width = corpo.scrollWidth + 'px';
+          var sobra = corpo.scrollWidth - corpo.clientWidth;
+          topo.classList.toggle('sem-rolagem', sobra <= 1);
+          if (topo.scrollLeft !== corpo.scrollLeft) {
+            topo.scrollLeft = corpo.scrollLeft;
+          }
+        }
+
+        function preparar(wrapper) {
+
+          var rolagem = wrapper.querySelector('.dataTables_scroll');
+          var corpo = wrapper.querySelector('.dataTables_scrollBody');
+          if (!rolagem || !corpo) return;
+
+          // A faixa fica logo antes da área de rolagem. No tema Bootstrap
+          // 5, essa área está dentro de uma div de coluna (não é filha
+          // direta do wrapper), então a faixa é procurada como irmã dela.
+          var topo = rolagem.previousElementSibling;
+          if (!topo || !topo.classList.contains('dt-rolagem-topo')) topo = null;
+
+          if (!topo) {
+            topo = document.createElement('div');
+            topo.className = 'dt-rolagem-topo';
+            topo.setAttribute('aria-hidden', 'true');
+            topo.appendChild(document.createElement('div'));
+            rolagem.parentNode.insertBefore(topo, rolagem);
+
+            // Uma barra segue a outra. Só atribui quando as posições
+            // diferem, então o eco de uma na outra para sozinho.
+            topo.addEventListener('scroll', function() {
+              if (corpo.scrollLeft !== topo.scrollLeft) corpo.scrollLeft = topo.scrollLeft;
+            });
+            corpo.addEventListener('scroll', function() {
+              if (topo.scrollLeft !== corpo.scrollLeft) topo.scrollLeft = corpo.scrollLeft;
+            });
+
+            if (window.ResizeObserver) {
+              var obs = new ResizeObserver(function() { ajustar(topo, corpo); });
+              obs.observe(corpo);
+              var tabela = corpo.querySelector('table');
+              if (tabela) obs.observe(tabela);
+
+              // Largura da área da tabela mudou: realinha cabeçalho e
+              // dados (só quando muda a LARGURA, para não entrar em
+              // laço com o próprio ajuste, que mexe na altura).
+              var larguraAnterior = wrapper.clientWidth;
+              var obsLargura = new ResizeObserver(function() {
+                var w = wrapper.clientWidth;
+                if (w > 0 && Math.abs(w - larguraAnterior) > 1) {
+                  larguraAnterior = w;
+                  ajustarColunas();
+                }
+              });
+              obsLargura.observe(wrapper);
+            }
+          }
+
+          ajustar(topo, corpo);
+        }
+
+        // init.dt / draw.dt disparam a cada tabela criada ou redesenhada
+        // (inclusive quando o Shiny recria a tabela com dados novos).
+        $(document).on('init.dt draw.dt column-sizing.dt', function(e, settings) {
+          if (!settings || !settings.nTableWrapper) return;
+          var wrapper = settings.nTableWrapper;
+          setTimeout(function() { preparar(wrapper); }, 0);
+        });
+
+        $(window).on('resize', function() {
+          document.querySelectorAll('.dataTables_wrapper').forEach(preparar);
+          ajustarColunas();
+        });
+
+        // Uma tabela que estava numa aba oculta só ganha largura quando a
+        // aba aparece.
+        $(document).on('shown.bs.tab', function() {
+          setTimeout(function() {
+            document.querySelectorAll('.dataTables_wrapper').forEach(preparar);
+            ajustarColunas();
+          }, 50);
+        });
+
+        // Menu lateral expandido/recolhido (a área de conteúdo muda de
+        // largura com transição de .2s).
+        $(document).on('transitionend', '#app-content', ajustarColunas);
+
+      })();
+
     "))
         
     ),
@@ -1092,8 +1650,29 @@ ui <- fluidPage(
     # SISTEMA PRINCIPAL
     # ===================================================
     
-    uiOutput("tela_principal")
-    
+    uiOutput("tela_principal"),
+
+    # Janela "processando" do Painel (fica oculta; ver
+    # farolPainelProcessando()).
+    div(
+        id = "painel-processando",
+        class = "painel-processando",
+        role = "status",
+        `aria-live` = "polite",
+        `aria-hidden` = "true",
+        div(
+            class = "painel-processando-caixa",
+            div(class = "painel-processando-icone", icon("chart-pie")),
+            div(class = "painel-processando-titulo", "Processando os dados"),
+            div(
+                class = "painel-processando-texto",
+                "Lendo as bases de Magistrados e de Pessoal e Auxiliar e calculando ",
+                "os indicadores dos painéis de BI. Aguarde um instante."
+            ),
+            div(class = "painel-processando-barra")
+        )
+    )
+
 )
 
 # =====================================================
@@ -1766,6 +2345,10 @@ server <- function(input, output, session) {
         selecionar_menu(ABA_ALERTAS_QUADRO)
     }, ignoreInit = TRUE)
     
+    observeEvent(input$ir_painel, {
+        selecionar_menu(ABA_PAINEL)
+    }, ignoreInit = TRUE)
+    
     observeEvent(
         
         input$menu,
@@ -1795,13 +2378,19 @@ server <- function(input, output, session) {
             class = "login-wrapper",
             
             div(
-                class = "login-card shadow-sm p-4",
+                # No passo de escolha do método, o cartão fica mais largo
+                # para os dois métodos caberem lado a lado (ver CSS
+                # .login-card-larga / .metodo-opcoes).
+                class = paste(
+                    "login-card shadow-sm p-4",
+                    if (is.null(metodoAcesso())) "login-card-larga"
+                ),
                 
                 div(
                     class = "logo-container mb-4",
                     
                     tags$img(
-                        src = "img/faroljus_logo_principal.png",
+                        src = "img/FarolJus_logo_principal.png",
                         class = "logo-login",
                         alt = "FarolJus"
                     )
@@ -2033,6 +2622,25 @@ server <- function(input, output, session) {
                     )
                 }),
                 
+                # Painel (indicadores de Magistrados e Servidores), logo
+                # acima de Configurações, como no FarolJus Lite. Abre a
+                # janela "Processando os dados" na hora do clique (ver
+                # farolPainelProcessando()).
+                actionLink(
+                    "ir_painel",
+                    tagList(
+                        icon("chart-pie"),
+                        tags$span(class = "icon-label", "Painel")
+                    ),
+                    class = paste(
+                        "icon-btn",
+                        if (identical(isolate(menuSelecionado()), ABA_PAINEL)) "ativo"
+                    ),
+                    title = "Painel",
+                    `data-menu` = ABA_PAINEL,
+                    onclick = "window.farolPainelProcessando && window.farolPainelProcessando();"
+                ),
+                
                 # -----------------------------------------------
                 # CONFIGURAÇÕES — agrupa Trocar empresa, Ver instruções e
                 # Administração (as duas de admin só para quem pode). O
@@ -2136,7 +2744,7 @@ server <- function(input, output, session) {
                     div(
                         class = "header-titulo",
                         tags$img(
-                            src = "img/faroljus_logo_principal.png",
+                            src = "img/FarolJus_logo_principal.png",
                             class = "header-logo",
                             alt = "Logo Farol Jus"
                         ),
@@ -2211,6 +2819,10 @@ server <- function(input, output, session) {
                     nav_panel_hidden(
                         value = ABA_ALERTAS_SERVENTIAS,
                         mod_alertas_serventias_ui("alertas_serventias")
+                    ),
+                    nav_panel_hidden(
+                        value = ABA_PAINEL,
+                        mod_painel_ui("painel")
                     )
                 )
                 
@@ -2229,10 +2841,9 @@ server <- function(input, output, session) {
     # SERVIDORES DOS MÓDULOS
     # ===================================================
     
-    # Antes, empresa e con não eram repassados: empresa() ficava sempre
-    # NULL (o req(empresa()) do botão "Gerenciar Arquivos" abortava em
-    # silêncio e nenhum dado era carregado) e, sem con, as colunas
-    # Situação Profissional Atual / Cargo continuavam em código.
+    # Os módulos não recebem mais `con`: os códigos do MPM vêm das
+    # constantes carregadas do SQLite na inicialização (ver
+    # R/tabelas_auxiliares.R).
     #
     # `ativo` e `empresa` exigem sessão AUTENTICADA: os módulos são
     # iniciados para toda sessão (inclusive na tela de login), e é a
@@ -2256,15 +2867,21 @@ server <- function(input, output, session) {
     mod_alertas_magistrados_server(
         "alertas_magistrados",
         ativo = modulo_ativo(ABA_ALERTAS_MAGISTRADOS),
-        empresa = empresa_sessao,
-        con = con
+        empresa = empresa_sessao
     )
     
     mod_alertas_server(
         "alertas",
         ativo = modulo_ativo(ABA_ALERTAS_QUADRO),
-        empresa = empresa_sessao,
-        con = con
+        empresa = empresa_sessao
+    )
+    
+    # Painel: lê as bases só quando é aberto (e quando algum arquivo
+    # mudou), com o mesmo cache de leitura dos módulos.
+    mod_painel_server(
+        "painel",
+        ativo = modulo_ativo(ABA_PAINEL),
+        empresa = empresa_sessao
     )
     
     # Cadastro TOTP / auditoria: só roda com a janela "Administração"

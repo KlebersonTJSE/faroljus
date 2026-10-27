@@ -1,7 +1,7 @@
 # =====================================================
 # modules/mod_alertas_serventias.R
 # -----------------------------------------------------
-# Módulo "Serventias" (botão Serventias da barra lateral), com duas abas:
+# Módulo "Serventias" (aba Serventias do menu principal), com três abas:
 #
 #   1) "Base de Dados - Serventias" — cadastro de serventias do MPM/CNJ,
 #      lido DIRETAMENTE da planilha serventias.xlsx (ou, se não houver
@@ -16,7 +16,13 @@
 #      funcionamento de mod_alertas.R (filtros, alertas consolidados na
 #      tabela, gráficos, CSV).
 #
-# Cada aba tem Tabela, Gráfico e Gerar arquivo CSV.
+#   3) "Inconsistências - Serventias" — verificações automáticas sobre a
+#      base (ver verificar_inconsistencias_serventias()), no mesmo
+#      formato da aba de inconsistências dos Magistrados: código
+#      duplicado, CEP ausente/inválido, nome repetido entre ativas e
+#      serventia inativa que ainda é lotação de magistrados/servidores.
+#
+# As abas 1 e 2 têm Tabela, Gráfico e Gerar arquivo CSV.
 #
 # Os dois arquivos ficam na subpasta de serventias da empresa:
 #
@@ -33,8 +39,10 @@
 # correspondente + a extensão original (serventias.xlsx,
 # alertas_serventias.csv...), qualquer que seja o nome original.
 #
+# Tudo roda só em R, sobre os arquivos enviados — sem banco de dados.
+#
 # DEPENDÊNCIA: reaproveita funções/constantes definidas em mod_alertas.R
-# — precisa ser carregado DEPOIS dele no app.R.
+# e mod_inconsistencias.R — precisa ser carregado DEPOIS deles no app.R.
 # =====================================================
 
 library(shiny)
@@ -73,7 +81,15 @@ local({
         "normalizar_texto_busca",
         "texto_busca_linhas",
         "ui_csv_dados",
-        "normalizar_nome_arquivo"
+        "normalizar_nome_arquivo",
+        "codigo_limpo",
+        "status_ativo",
+        "chave_nome_orgao",
+        "indice_serventias",
+        "carregar_lotacoes_servidores_empresa",
+        "gravar_arquivo_substituindo",
+        "mod_inconsistencias_ui",
+        "mod_inconsistencias_server"
     )
     
     faltando <- dependencias[!vapply(dependencias, exists, logical(1))]
@@ -81,7 +97,8 @@ local({
     if (length(faltando) > 0) {
         stop(
             "mod_alertas_serventias.R precisa ser carregado depois de ",
-            "mod_alertas.R. Não encontrado: ", paste(faltando, collapse = ", ")
+            "mod_alertas.R e mod_inconsistencias.R. Não encontrado: ",
+            paste(faltando, collapse = ", ")
         )
     }
     
@@ -169,8 +186,7 @@ carregar_arquivo_serventias <- function(arquivo) {
         return(data.frame())
     }
     
-    # Lido e limpo uma vez por processo; reaproveitado por todas as
-    # sessões enquanto o arquivo não mudar (com_cache_arquivo(), R/utils.R).
+    # Lido e limpo uma vez por processo e reaproveitado por todas as sessões (e pelos outros módulos e pelo Painel) enquanto o arquivo não mudar — ver com_cache_arquivo() em R/utils.R.
     com_cache_arquivo(arquivo, "serventias", function() {
         limpar_dados_lidos(ler_arquivo_serventias(arquivo))
     })
@@ -305,6 +321,254 @@ consolidar_alertas_serventias_tabela <- function(df) {
     }
     
     df_exibicao
+    
+}
+
+# =====================================================
+# INCONSISTÊNCIAS — VERIFICAÇÕES AUTOMÁTICAS NA BASE
+# -----------------------------------------------------
+# Mesma "inteligência" da aba de inconsistências dos Magistrados,
+# adaptada ao cadastro de Serventias. Rodam sobre a base (serventias.xlsx
+# / .csv) e apontam padrões que contrariam o cadastro do MPM/CNJ. São
+# indícios para conferência, não correções automáticas.
+#
+#   1) CÓDIGO DE SERVENTIA DUPLICADO
+#      O mesmo "Código Serventia" em mais de um registro da base.
+#      Alta se dois ou mais registros estão ativos; Média nos demais.
+#
+#   2) CEP AUSENTE OU INVÁLIDO (só serventias ativas)
+#      Alta: CEP que não tem 8 dígitos ou é uma sequência repetida
+#      ("00000000"); Média: CEP não informado.
+#
+#   3) NOME REPETIDO ENTRE SERVENTIAS ATIVAS
+#      Duas ou mais serventias ATIVAS, com códigos diferentes, com o
+#      mesmo nome (sem diferenciar acentos/maiúsculas). Média.
+#
+#   4) SERVENTIA INATIVA COM LOTAÇÃO ATIVA
+#      Serventia com status diferente de "Ativo" que ainda é a lotação
+#      ATUAL (último registro do CPF, em situação não encerrada) de
+#      magistrados (base do módulo Magistrados) e/ou servidores
+#      (arquivos de alertas do Quadro de Pessoal). Casada pelo código ou
+#      pelo nome. Alta. Só roda se a base tiver a coluna Status e se ao
+#      menos um desses arquivos tiver sido enviado.
+# =====================================================
+
+VERIFICACAO_SRV_CODIGO <- "Código de serventia duplicado"
+VERIFICACAO_SRV_CEP <- "CEP ausente ou inválido"
+VERIFICACAO_SRV_NOME <- "Nome repetido entre serventias ativas"
+VERIFICACAO_SRV_LOTACAO <- "Serventia inativa com lotação ativa"
+
+VERIFICACOES_SERVENTIAS <- c(
+    VERIFICACAO_SRV_CODIGO,
+    VERIFICACAO_SRV_CEP,
+    VERIFICACAO_SRV_NOME,
+    VERIFICACAO_SRV_LOTACAO
+)
+
+FILTROS_TEXTO_INC_SERVENTIAS <- c(
+    "Código Serventia" = "Código Serventia",
+    "Nome da Serventia" = "Nome da Serventia"
+)
+
+inconsistencias_serventias_vazio <- function() {
+    tibble(
+        `Verificação` = character(0),
+        Gravidade = character(0),
+        `Código Serventia` = character(0),
+        `Nome da Serventia` = character(0),
+        Status = character(0),
+        CEP = character(0),
+        Motivo = character(0)
+    )
+}
+
+# Lista curta de nomes para o Motivo ("A, B, C e mais 4").
+listar_nomes_motivo <- function(nomes, max = 5) {
+    nomes <- sort(unique(nomes[!is.na(nomes) & nomes != ""]))
+    if (length(nomes) == 0) {
+        return("")
+    }
+    texto <- paste(head(nomes, max), collapse = ", ")
+    if (length(nomes) > max) {
+        texto <- paste0(texto, sprintf(" e mais %d", length(nomes) - max))
+    }
+    texto
+}
+
+# Lotações atuais de magistrados e servidores da empresa (para a
+# verificação 4). Cada parte só entra se o respectivo módulo estiver
+# carregado e o arquivo tiver sido enviado.
+carregar_lotacoes_empresa <- function(empresa) {
+    
+    partes <- list(
+        carregar_lotacoes_servidores_empresa(empresa) %>% mutate(tipo = "servidor")
+    )
+    
+    if (exists("carregar_lotacoes_magistrados_empresa")) {
+        partes <- c(
+            partes,
+            list(carregar_lotacoes_magistrados_empresa(empresa) %>% mutate(tipo = "magistrado"))
+        )
+    }
+    
+    bind_rows(partes)
+    
+}
+
+# `base` = dados_base() (como veio no arquivo); `lotacoes` =
+# carregar_lotacoes_empresa().
+verificar_inconsistencias_serventias <- function(base, lotacoes = NULL) {
+    
+    vazio <- inconsistencias_serventias_vazio()
+    
+    if (is.null(base) || nrow(base) == 0) {
+        return(vazio)
+    }
+    
+    valor <- function(regex) {
+        c <- coluna_serventia(base, regex)
+        if (is.null(c)) rep(NA_character_, nrow(base)) else as.character(base[[c]])
+    }
+    
+    tem_status <- !is.null(coluna_serventia(base, REGEX_COL_STATUS))
+    
+    d <- tibble(
+        codigo = codigo_limpo(valor(REGEX_COL_CODIGO_SERVENTIA)),
+        nome = valor(REGEX_COL_NOME_SERVENTIA),
+        status = valor(REGEX_COL_STATUS),
+        cep = valor(REGEX_COL_CEP)
+    ) %>%
+        mutate(
+            .linha = row_number(),
+            # Sem coluna Status (ou status vazio), conta como ativa.
+            ativa = is.na(status) | str_trim(status) == "" | status_ativo(status),
+            chave_nome = chave_nome_orgao(nome)
+        )
+    
+    montar <- function(x, verificacao) {
+        if (is.null(x) || nrow(x) == 0) {
+            return(vazio)
+        }
+        tibble(
+            `Verificação` = verificacao,
+            Gravidade = x$Gravidade,
+            `Código Serventia` = x$codigo,
+            `Nome da Serventia` = x$nome,
+            Status = x$status,
+            CEP = formatar_cep(x$cep),
+            Motivo = x$Motivo
+        )
+    }
+    
+    # ---- 1) Código duplicado ----
+    
+    r1 <- d %>%
+        filter(!is.na(codigo) & codigo != "") %>%
+        group_by(codigo) %>%
+        filter(n() > 1) %>%
+        mutate(
+            Gravidade = ifelse(sum(ativa) >= 2, "Alta", "Média"),
+            Motivo = sprintf(
+                "O código %s aparece em %d registros da base (status: %s).",
+                codigo, n(), paste(unique(coalesce(status, "não informado")), collapse = ", ")
+            )
+        ) %>%
+        ungroup() %>%
+        arrange(codigo, .linha)
+    
+    # ---- 2) CEP ausente ou inválido (ativas) ----
+    
+    r2 <- if (is.null(coluna_serventia(base, REGEX_COL_CEP))) {
+        NULL
+    } else {
+        d %>%
+            filter(ativa) %>%
+            mutate(
+                digitos = str_remove_all(coalesce(cep, ""), "\\D"),
+                ausente = is.na(cep) | str_trim(cep) == "",
+                invalido = !ausente & (nchar(digitos) != 8 | str_detect(digitos, "^(\\d)\\1{7}$"))
+            ) %>%
+            filter(ausente | invalido) %>%
+            mutate(
+                Gravidade = ifelse(invalido, "Alta", "Média"),
+                Motivo = ifelse(
+                    ausente,
+                    "Serventia ativa sem CEP informado.",
+                    sprintf("Serventia ativa com CEP \"%s\" inválido (precisa ter 8 dígitos e não ser uma sequência repetida).", cep)
+                )
+            ) %>%
+            arrange(nome)
+    }
+    
+    # ---- 3) Nome repetido entre serventias ativas ----
+    
+    r3 <- d %>%
+        filter(ativa, !is.na(chave_nome) & chave_nome != "") %>%
+        group_by(chave_nome) %>%
+        filter(n_distinct(codigo) > 1) %>%
+        mutate(
+            Gravidade = "Média",
+            Motivo = sprintf(
+                "Mesmo nome de outra(s) serventia(s) ativa(s) — códigos %s.",
+                paste(sort(unique(codigo)), collapse = ", ")
+            )
+        ) %>%
+        ungroup() %>%
+        arrange(chave_nome, codigo)
+    
+    # ---- 4) Serventia inativa com lotação ativa ----
+    
+    r4 <- NULL
+    
+    if (tem_status && !is.null(lotacoes) && nrow(lotacoes) > 0) {
+        
+        # Só chaves sem nenhuma serventia ativa (um nome repetido entre
+        # uma ativa e uma inativa não é apontado).
+        indice <- indice_serventias(base)
+        chaves_inativas <- indice$chave[!indice$alguma_ativa]
+        
+        chaves_serv <- bind_rows(
+            d %>% filter(!ativa, !is.na(codigo) & codigo != "") %>%
+                transmute(.linha, chave = paste0("cod:", codigo)),
+            d %>% filter(!ativa, !is.na(chave_nome) & chave_nome != "") %>%
+                transmute(.linha, chave = paste0("nome:", chave_nome))
+        ) %>%
+            filter(chave %in% chaves_inativas) %>%
+            distinct()
+        
+        lotados <- chaves_serv %>%
+            inner_join(lotacoes, by = "chave", relationship = "many-to-many") %>%
+            distinct(.linha, tipo, CPF, Nome) %>%
+            group_by(.linha) %>%
+            summarise(
+                n_mag = n_distinct(CPF[tipo == "magistrado"]),
+                n_serv = n_distinct(CPF[tipo == "servidor"]),
+                nomes_mag = listar_nomes_motivo(Nome[tipo == "magistrado"]),
+                nomes_serv = listar_nomes_motivo(Nome[tipo == "servidor"]),
+                .groups = "drop"
+            )
+        
+        r4 <- d %>%
+            inner_join(lotados, by = ".linha") %>%
+            mutate(
+                Gravidade = "Alta",
+                Motivo = paste0(
+                    "Status \"", coalesce(status, "não informado"), "\" na base, mas ainda é a lotação atual de ",
+                    ifelse(n_mag > 0, sprintf("%d magistrado(s) (%s)", n_mag, nomes_mag), ""),
+                    ifelse(n_mag > 0 & n_serv > 0, " e de ", ""),
+                    ifelse(n_serv > 0, sprintf("%d servidor(es) (%s)", n_serv, nomes_serv), ""),
+                    ". Conferir o status da serventia ou a lotação."
+                )
+            ) %>%
+            arrange(nome)
+    }
+    
+    bind_rows(
+        montar(r1, VERIFICACAO_SRV_CODIGO),
+        montar(r2, VERIFICACAO_SRV_CEP),
+        montar(r3, VERIFICACAO_SRV_NOME),
+        montar(r4, VERIFICACAO_SRV_LOTACAO)
+    )
     
 }
 
@@ -453,9 +717,17 @@ mod_alertas_serventias_ui <- function(id) {
           color: #6c757d;
         }
 
-        #%1$s .dataTables_wrapper,
-        #%1$s table.dataTable {
+        #%1$s .dataTables_wrapper {
           width: 100%% !important;
+        }
+
+        /* Tabelas que cabem na tela ocupam a largura toda. Sem
+           !important: com rolagem horizontal, o DataTables precisa dar
+           a mesma largura (maior que a tela) ao cabeçalho e aos dados —
+           forçar 100%% na tabela de dados desalinhava os títulos das
+           colunas ao redimensionar a janela. */
+        #%1$s table.dataTable {
+          min-width: 100%%;
         }
 
       ", id)))
@@ -664,6 +936,29 @@ mod_alertas_serventias_ui <- function(id) {
                                 )
                             )
                         )
+                    ),
+                    
+                    # =============================================
+                    # ABA 3 — INCONSISTÊNCIAS - SERVENTIAS
+                    # -------------------------------------------------
+                    # Verificações automáticas sobre a base (ver
+                    # verificar_inconsistencias_serventias());
+                    # apresentação pelo submódulo mod_inconsistencias.R.
+                    # =============================================
+                    
+                    tabPanel(
+                        title = tagList(
+                            icon("clipboard-check", class = "me-1"),
+                            "Inconsistências - Serventias",
+                            mod_inconsistencias_badge_ui(ns("inc"))
+                        ),
+                        value = "inconsistencias",
+                        
+                        mod_inconsistencias_ui(
+                            ns("inc"),
+                            verificacoes = VERIFICACOES_SERVENTIAS,
+                            filtros_texto = FILTROS_TEXTO_INC_SERVENTIAS
+                        )
                     )
                 )
             )
@@ -685,6 +980,12 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
         dados_base <- reactiveVal(data.frame())   # serventias.csv
         dados <- reactiveVal(data.frame())        # alertas_serventias.csv
         
+        # Lotações atuais de magistrados/servidores (outros módulos) — só
+        # para a verificação "Serventia inativa com lotação ativa".
+        # Mudanças nesses arquivos entram aqui no "Atualizar Dados" ou na
+        # troca de empresa.
+        lotacoes <- reactiveVal(NULL)
+        
         empresa_definida <- function() {
             e <- empresa()
             !is.null(e) && !is.na(e) && trimws(e) != ""
@@ -694,6 +995,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             pasta <- pasta_serventias(empresa())
             dados_base(carregar_arquivo_serventias(arquivo_do_tipo(pasta, "base")))
             dados(carregar_arquivo_serventias(arquivo_do_tipo(pasta, "alertas")))
+            lotacoes(carregar_lotacoes_empresa(empresa()))
         }
         
         # ----------------------------------------
@@ -726,6 +1028,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
                 if (!is.null(empresa_carregada())) {
                     dados_base(data.frame())
                     dados(data.frame())
+                    lotacoes(NULL)
                     empresa_carregada(NULL)
                 }
                 return(invisible(NULL))
@@ -823,7 +1126,7 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             inicio <- Sys.time()
             
             # "Atualizar Dados" sempre relê do disco.
-            limpar_cache_arquivos(pasta_serventias(empresa()))
+            limpar_cache_arquivos(file.path(PASTA_ALERTAS_BASE, empresa()))
             recarregar()
             empresa_carregada(empresa())
             atualizar_todos_combos()
@@ -1153,17 +1456,17 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
                 
                 info <- TIPOS_ARQUIVO_SERVENTIAS[[pendente$tipo[i]]]
                 
-                # Remove o arquivo anterior do mesmo tipo em QUALQUER
-                # formato — senão um serventias.xlsx antigo continuaria
-                # tendo prioridade sobre um serventias.csv novo.
+                # O arquivo anterior do mesmo tipo, em QUALQUER formato, é
+                # substituído (senão um .xlsx antigo continuaria com prioridade
+                # sobre um .csv novo) — mas só DEPOIS de o novo estar gravado
+                # (gravar_arquivo_substituindo(), em R/utils.R). Antes, o
+                # anterior era apagado primeiro e uma falha na cópia deixava a
+                # empresa sem o arquivo.
                 anteriores <- arquivos_do_tipo(pasta, pendente$tipo[i])
-                if (length(anteriores) > 0) {
-                    file.remove(anteriores)
-                }
-                
+
                 destino <- paste0(info$radical, ".", pendente$extensao[i])
-                
-                if (isTRUE(file.copy(pendente$datapath[i], file.path(pasta, destino), overwrite = TRUE))) {
+
+                if (gravar_arquivo_substituindo(pendente$datapath[i], file.path(pasta, destino), anteriores)) {
                     gravados <- c(gravados, sprintf("%s → %s", pendente$name[i], destino))
                 } else {
                     showNotification(
@@ -1510,7 +1813,8 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo."
         )
         
-        # Espera o usuário parar de digitar (400 ms) antes de filtrar.
+        # Espera o usuário parar de digitar (400 ms) antes de filtrar —
+        # antes, cada tecla refiltrava e redesenhava tabela e gráficos.
         codigo_d <- debounce(reactive(input$codigo), 400)
         nome_d <- debounce(reactive(input$nome), 400)
         
@@ -1521,22 +1825,19 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
             col_codigo <- coluna_serventia(df, REGEX_COL_CODIGO_SERVENTIA)
             col_nome <- coluna_serventia(df, REGEX_COL_NOME_SERVENTIA)
             
-            codigo <- str_trim(codigo_d() %||% "")
-            nome <- str_trim(nome_d() %||% "")
-            
-            if (codigo != "" && !is.null(col_codigo)) {
+            if (!is.null(codigo_d()) && str_trim(codigo_d()) != "" && !is.null(col_codigo)) {
                 df <- df %>%
                     filter(str_detect(
-                        str_to_upper(coalesce(as.character(.data[[col_codigo]]), "")),
-                        fixed(str_to_upper(codigo))
+                        str_to_upper(as.character(.data[[col_codigo]])),
+                        fixed(str_to_upper(str_trim(codigo_d())))
                     ))
             }
             
-            if (nome != "" && !is.null(col_nome)) {
+            if (!is.null(nome_d()) && str_trim(nome_d()) != "" && !is.null(col_nome)) {
                 df <- df %>%
                     filter(str_detect(
-                        str_to_upper(coalesce(as.character(.data[[col_nome]]), "")),
-                        fixed(str_to_upper(nome))
+                        str_to_upper(as.character(.data[[col_nome]])),
+                        fixed(str_to_upper(str_trim(nome_d())))
                     ))
             }
             
@@ -1730,6 +2031,73 @@ mod_alertas_serventias_server <- function(id, ativo = reactive(TRUE), empresa = 
                     type = "message"
                 )
             }
+        )
+        
+        # =================================================
+        # ABA 3 — INCONSISTÊNCIAS - SERVENTIAS
+        # -------------------------------------------------
+        # Calculada sobre dados_base() (todos os registros, sem os
+        # filtros da aba Base de Dados).
+        # =================================================
+        
+        inconsistencias <- reactive({
+            verificar_inconsistencias_serventias(dados_base(), lotacoes())
+        })
+        
+        sem_lotacoes <- reactive({
+            is.null(lotacoes()) || nrow(lotacoes()) == 0
+        })
+        
+        sem_status <- reactive({
+            is.null(coluna_serventia(dados_base(), REGEX_COL_STATUS))
+        })
+        
+        mod_inconsistencias_server(
+            "inc",
+            dados = inconsistencias,
+            verificacoes = reactive({
+                lista <- list(
+                    list(descricao = "O mesmo código em mais de um registro da base. Alta: dois ou mais registros ativos."),
+                    list(
+                        descricao = "Serventia ativa sem CEP (Média) ou com CEP que não tem 8 dígitos / é sequência repetida (Alta).",
+                        indisponivel = is.null(coluna_serventia(dados_base(), REGEX_COL_CEP))
+                    ),
+                    list(descricao = "Duas ou mais serventias ativas, com códigos diferentes, com o mesmo nome."),
+                    list(
+                        descricao = paste0(
+                            "Serventia com status diferente de \"Ativo\" que ainda é a lotação atual de magistrados ",
+                            "(módulo Magistrados) ou servidores (Quadro de Pessoal)."
+                        ),
+                        indisponivel = sem_status() || sem_lotacoes()
+                    )
+                )
+                setNames(lista, VERIFICACOES_SERVENTIAS)
+            }),
+            mensagem_sem_base = reactive({
+                if (nrow(dados_base()) == 0) MSG_SEM_BASE
+            }),
+            avisos = reactive({
+                if (nrow(dados_base()) > 0 && (sem_status() || sem_lotacoes())) {
+                    div(
+                        class = "alert alert-warning py-2",
+                        style = "font-size: .85rem;",
+                        icon("circle-info", class = "me-1"),
+                        if (sem_status()) {
+                            "A base de Serventias não tem a coluna Status: a verificação de serventia inativa com lotação ativa não pôde ser feita."
+                        } else {
+                            paste0(
+                                "Nenhum arquivo de Magistrados ou do Quadro de Pessoal foi encontrado: a verificação de ",
+                                "serventia inativa com lotação ativa não pôde ser feita. Envie-os nos respectivos módulos ",
+                                "e clique em \"Atualizar Dados\"."
+                            )
+                        }
+                    )
+                }
+            }),
+            col_entidade = "Código Serventia",
+            rotulo_entidade = "serventia(s)",
+            filtros_texto = FILTROS_TEXTO_INC_SERVENTIAS,
+            prefixo_csv = "inconsistencias-serventias"
         )
         
     })

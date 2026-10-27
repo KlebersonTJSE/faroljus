@@ -116,18 +116,25 @@ FarolJus/
 │   ├── utils.R            # empresas (DISTRO_N) e utilitários
 │   ├── auth.R             # login AD (LDAP via Python)
 │   ├── auth_totp.R        # login TOTP, cadastro e auditoria
-│   └── database.R         # conexão com o IRIS (JDBC)
+│   ├── database.R         # conexão com o IRIS (JDBC)
+│   └── tabelas_auxiliares.R  # códigos do MPM no SQLite (Cargo/Situação)
 ├── modules/
-│   ├── mod_alertas.R      # Pessoal e Auxiliar (base, alertas, CSV, arquivos)
+│   ├── mod_alertas.R      # Pessoal e Auxiliar (base, envio, alertas, inconsistências)
 │   ├── mod_alertas_serventias.R  # Serventias
 │   ├── mod_alertas_magistrados.R # Magistrados
+│   ├── mod_inconsistencias.R     # aba de inconsistências (comum aos módulos)
+│   ├── mod_painel.R       # Painel (indicadores de Magistrados e Servidores)
 │   ├── mod_matricula.R    # matrícula por nome (consulta ao IRIS)
 │   └── mod_totp_admin.R   # janela Administração
 ├── tests/
 │   └── test_seguranca.R   # testes de segurança e desempenho
 ├── data/
 │   ├── faroljus.db        # banco SQLite (criado automaticamente; não versionado)
-│   └── <EMPRESA>/{pessoal,serventias,magistrados}/   # não versionados
+│   └── <EMPRESA>/         # não versionados
+│       ├── pessoal_auxiliar/   # base (pessoal_auxiliar.xlsx/.csv) e envio
+│       ├── alertas_csv/        # alertas de Pessoal e Auxiliar do MPM
+│       ├── serventias/
+│       └── magistrados/
 ├── img/
 ├── README.md
 ├── LICENSE
@@ -157,6 +164,14 @@ FarolJus/
 | `CACHE_ARQUIVOS_MAX` | Quantos arquivos lidos ficam em cache na memória, compartilhados entre as sessões (padrão: `30`; `0` desliga). |
 
 Há um modelo em `.Renviron.example`. O `.Renviron` contém senhas: não o inclua no repositório nem em pacotes de publicação.
+
+### 📁 Pastas de Pessoal e Auxiliar (layout do FarolJus Lite)
+
+Na primeira execução desta versão, se existir a pasta antiga `<EMPRESA>/pessoal/`, o app **copia** a base (`quadro_pessoal_auxiliar.*`) para `pessoal_auxiliar/pessoal_auxiliar.*` e os demais arquivos para `alertas_csv/`, e renomeia a pasta antiga para `pessoal_migrado_<data>`. Nada é apagado.
+
+### 🗂️ Códigos do MPM (Cargo e Situação profissional)
+
+As nomenclaturas ficam nas tabelas `tab_situacao_profissional_servidor`, `tab_cargo_servidor`, `tab_situacao_profissional_magistrado` e `tab_cargo_magistrado` do `faroljus.db`, criadas automaticamente. Um ajuste feito no banco vale a partir da próxima inicialização do app.
 
 ### 🔒 Dados que não vão para o Git
 

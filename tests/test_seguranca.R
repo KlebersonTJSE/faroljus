@@ -397,14 +397,14 @@ cols <- grep("^Alerta", names(df_alertas), value = TRUE)
 checar("consolidação vetorizada = antiga",
        identical(consolidar_colunas_por_linha(df_alertas, cols), unname(consolidar_antigo(df_alertas, cols))))
 
-# Tabelas auxiliares: lidas uma vez e reaproveitadas (TTL).
-consultas <- 0L
-trace_id <- trace("dbGetQuery", quote(consultas <<- consultas + 1L), where = asNamespace("DBI"), print = FALSE)
-rm(list = ls(.tabelas_auxiliares, pattern = "^tabela:"), envir = .tabelas_auxiliares)
-for (i in 1:5) invisible(ler_tabela_auxiliar(con, TAB_CARGO))
-untrace("dbGetQuery", where = asNamespace("DBI"))
-checar("tabela auxiliar consultada uma vez em 5 leituras", consultas == 1L)
-checar("tabelas auxiliares semeadas", length(ler_tabela_auxiliar(con, TAB_CARGO)) == length(SEMENTE_CARGO_SERVIDOR))
+# Tabelas auxiliares: semeadas no SQLite e lidas para as constantes.
+checar("tabelas auxiliares semeadas no SQLite",
+       dbGetQuery(con, "SELECT COUNT(*) n FROM tab_cargo_servidor")$n == length(CARGO_SERVIDOR))
+invisible(dbExecute(con, "UPDATE tab_cargo_servidor SET nomenclatura = 'Estagiário(a) TESTE' WHERE codigo = 5"))
+carregar_tabelas_auxiliares(con)
+checar("ajuste feito no banco vale para a tradução", unname(CARGO_SERVIDOR["5"]) == "Estagiário(a) TESTE")
+invisible(dbExecute(con, "UPDATE tab_cargo_servidor SET nomenclatura = 'Estagiário(a)' WHERE codigo = 5"))
+carregar_tabelas_auxiliares(con)
 
 # =====================================================
 cat("\n[10] Módulos: carga sob demanda\n")
@@ -454,11 +454,16 @@ testServer(server, {
     p_serv <- pos_em(h, 'data-menu="AlertasServentias"')
     p_cfg <- pos_em(h, 'class="icon-grupo"')
     p_sair <- pos_em(h, 'id="sair"')
-    checar("ordem: Magistrados, Pessoal e Auxiliar, Serventias, Configurações, Sair",
-           all(c(p_mag, p_pes, p_serv, p_cfg, p_sair) > 0) &&
-               p_mag < p_pes && p_pes < p_serv && p_serv < p_cfg && p_cfg < p_sair)
+    p_painel <- pos_em(h, 'data-menu="Painel"')
+    checar("ordem: Magistrados, Pessoal e Auxiliar, Serventias, Painel, Configurações, Sair",
+           all(c(p_mag, p_pes, p_serv, p_painel, p_cfg, p_sair) > 0) &&
+               p_mag < p_pes && p_pes < p_serv && p_serv < p_painel && p_painel < p_cfg && p_cfg < p_sair)
+    checar("Painel abre a janela 'Processando os dados'",
+           grepl("farolPainelProcessando", h, fixed = TRUE))
     checar("barra começa expandida", grepl('class="icon-bar expandida"', h, fixed = TRUE))
     checar("módulo inicial é Magistrados", identical(menuSelecionado(), ABA_ALERTAS_MAGISTRADOS))
+    session$setInputs(ir_painel = 1)
+    checar("clicar em Painel seleciona o Painel", identical(menuSelecionado(), ABA_PAINEL))
     sub <- regmatches(h, regexpr('class="icon-submenu".*?id="sair"', h))
     checar("opções de Configurações ficam dentro da barra (Trocar empresa, Ver instruções, Administração)",
            length(sub) == 1 && pos_em(sub, 'id="trocar_empresa"') > 0 &&
@@ -466,6 +471,32 @@ testServer(server, {
                pos_em(sub, 'id="mostrar_readme"') < pos_em(sub, 'id="abrir_admin"'))
     checar("submenu flutuante antigo removido", !grepl("submenu-config", h, fixed = TRUE))
 })
+
+testServer(server, {
+    session$setInputs(continuar = 0, voltar_metodo = 0)
+    h <- as.character(output$tela_login$html)
+    checar("tela inicial: cartão largo com os dois métodos (lado a lado se couber)",
+           grepl("login-card-larga", h, fixed = TRUE) &&
+               grepl("Login Corporativo", h, fixed = TRUE) && grepl("Código Authenticator", h, fixed = TRUE))
+    session$setInputs(metodo_acesso = "ad", continuar = 1)
+    h <- as.character(output$tela_login$html)
+    checar("depois de escolher o método, cartão volta à largura normal", !grepl("login-card-larga", h, fixed = TRUE))
+})
+
+# Migração do layout antigo de Pessoal e Auxiliar (<EMPRESA>/pessoal).
+raiz_mig <- file.path(tempdir(), "migracao")
+unlink(raiz_mig, recursive = TRUE)
+dir.create(file.path(raiz_mig, "TJSE", "pessoal"), recursive = TRUE)
+writeLines("CPF;Nome", file.path(raiz_mig, "TJSE", "pessoal", "quadro_pessoal_auxiliar.csv"))
+writeLines("CPF;Alerta: X", file.path(raiz_mig, "TJSE", "pessoal", "alertas mpm.csv"))
+migrar_pastas_pessoal(raiz_mig)
+checar("migração: base vai para pessoal_auxiliar/pessoal_auxiliar.csv",
+       file.exists(file.path(raiz_mig, "TJSE", "pessoal_auxiliar", "pessoal_auxiliar.csv")))
+checar("migração: alertas vão para alertas_csv/",
+       file.exists(file.path(raiz_mig, "TJSE", "alertas_csv", "alertas mpm.csv")))
+checar("migração: pasta antiga é renomeada (nada apagado)",
+       !dir.exists(file.path(raiz_mig, "TJSE", "pessoal")) &&
+           length(list.files(file.path(raiz_mig, "TJSE"), pattern = "^pessoal_migrado_")) == 1)
 
 limpar_auditoria()
 invisible(dbExecute(con, "UPDATE usuarios_totp SET ultimo_contador = NULL"))
@@ -477,6 +508,608 @@ testServer(server, {
            grepl('id="mostrar_readme"', h, fixed = TRUE) &&
                !grepl('id="trocar_empresa"', h, fixed = TRUE) && !grepl('id="abrir_admin"', h, fixed = TRUE))
 })
+
+# =====================================================
+# TESTES DOS MÓDULOS VINDOS DO FAROLJUS LITE
+# -----------------------------------------------------
+# Seções [8], [9], [10], [12], [13], [14] e [15] de
+# tests/test_seguranca.R do FarolJus Lite, renumeradas como [L8]...
+# =====================================================
+
+limpar_cache_arquivos()
+codigo_app <- paste(readLines(file.path(dir_teste, "app.R"), encoding = "UTF-8", warn = FALSE), collapse = "\n")
+
+# =====================================================
+cat("\n[L8] Pessoal e Auxiliar: aba Alertas (filtros e mensagens)\n")
+# =====================================================
+
+escrever_csv <- function(linhas, arquivo) {
+    dir.create(dirname(arquivo), recursive = TRUE, showWarnings = FALSE)
+    writeLines(enc2utf8(linhas), arquivo, useBytes = TRUE)
+    invisible(arquivo)
+}
+
+CAB_ORGAO <- "Órgão de lotação do(a) Servidor(a) ou Auxiliar"
+CAB_SIT <- "Situação profissional atual"
+CAB_INICIO <- "Data de início da situação"
+CAB_SAIDA <- "Data de saída da situação"
+
+escrever_csv(c(
+    paste("CPF;Nome", CAB_SIT, "Cargo", CAB_INICIO, CAB_ORGAO, "Alerta: Email;Conflito: Duplicidade no próprio Tribunal", sep = ";"),
+    "00011122233;FULANA (TESTE) DA SILVA;3;1;01/01/2026;VARA A;E-mail não informado;",
+    "44455566677;BELTRANO SOUZA;1;5;01/02/2026;VARA B;;2 registros ativos"
+), file.path(caminho_alertas("TJSE"), "teste.csv"))
+
+testServer(mod_alertas_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+    session$setInputs(alerta = "Todos", conflito = "Todos", cpf = "", nome = "")
+    checar("carrega o CSV de alertas da empresa", nrow(dados()) == 2)
+
+    session$setInputs(nome = "(TESTE")
+    checar("parêntese no filtro de nome não quebra", nrow(dados_filtrados()) == 1)
+
+    session$setInputs(nome = "", cpf = "000.111.222-33")
+    checar("CPF com pontuação encontra o registro", nrow(dados_filtrados()) == 1)
+
+    session$setInputs(cpf = "[")
+    checar("colchete no filtro de CPF não quebra", nrow(dados_filtrados()) == 0)
+    checar("sem resultado mostra a mensagem de filtro", grepl("filtros", mensagem_sem_linhas()))
+
+    session$setInputs(cpf = "")
+    checar("tabela traduz o código do cargo",
+           any(grepl("^Estagi", tabela_exibicao()$Cargo)) && !any(tabela_exibicao()$Cargo %in% c("1", "5")))
+})
+
+testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    checar("empresa sem arquivos: tabela de alertas fica vazia (aviso vai para a janela)", isFALSE(mensagem_sem_linhas()))
+})
+
+# =====================================================
+cat("\n[L9] Regras de inconsistência corrigidas\n")
+# =====================================================
+
+hoje_teste <- as.Date("2026-10-15")
+serv <- function(cpf, sit, inicio, orgao = "VARA X", cargo = "1", saida = NA) {
+    df <- data.frame(cpf, "P", orgao, sit, cargo, inicio, saida, stringsAsFactors = FALSE)
+    names(df) <- c("CPF", "Nome", CAB_ORGAO, CAB_SIT, "Cargo", CAB_INICIO, CAB_SAIDA)
+    df
+}
+verif <- function(df, ...) verificar_inconsistencias_servidores(df, hoje = hoje_teste, ...)
+tem <- function(r, v) any(r$`Verificação` == v)
+
+r <- verif(rbind(serv("1", "7", "01/01/2020"), serv("1", "8", "01/06/2024")))
+checar("servidor aposentado que depois falece NÃO é 'retorno'", !tem(r, VERIFICACAO_SERV_DEFINITIVA))
+
+r <- verif(rbind(serv("2", "7", "01/01/2021"), serv("2", "3", "01/03/2022")))
+checar("aposentado que volta a situação ativa é apontado (Alta)",
+       tem(r, VERIFICACAO_SERV_DEFINITIVA) && r$Gravidade[r$`Verificação` == VERIFICACAO_SERV_DEFINITIVA][1] == "Alta")
+
+r <- verif(rbind(serv("3", "8", "01/01/2023"), serv("3", "9", "01/01/2024")))
+checar("depois de falecimento, qualquer registro continua sendo apontado", tem(r, VERIFICACAO_SERV_DEFINITIVA))
+
+lot <- lotacoes_ativas_pessoas(
+    rbind(serv("4", "3", "10/08/2026", orgao = "VARA NOVA"), serv("4", "3", NA, orgao = "VARA ANTIGA")),
+    REGEX_COL_ORGAO_SERVIDOR, SITUACOES_SERV_ENCERRADAS
+)
+checar("lotação atual é o registro datado mais recente (não o sem data)", identical(lot$orgao, "VARA NOVA"))
+
+lot <- lotacoes_ativas_pessoas(rbind(serv("5", "3", NA, orgao = "A"), serv("5", "3", NA, orgao = "B")),
+                               REGEX_COL_ORGAO_SERVIDOR, SITUACOES_SERV_ENCERRADAS)
+checar("sem nenhuma data, vale o último do arquivo", identical(lot$orgao, "B"))
+
+excl <- serv("6", "3", "01/01/2030")
+excl[["Exclusão de registro por erro"]] <- "S"
+checar("registro marcado como exclusão por erro não é verificado", nrow(verif(excl)) == 0)
+excl[["Exclusão de registro por erro"]] <- "N"
+checar("o mesmo registro sem a marca é apontado (data no futuro)", tem(verif(excl), VERIFICACAO_SERV_DATAS))
+
+mag <- function(cpf, sit, inicio) {
+    df <- data.frame(cpf, "M", "100", sit, "1", inicio, stringsAsFactors = FALSE)
+    names(df) <- c("CPF", "Nome", "Órgão de lotação do magistrado(a)", CAB_SIT, "Cargo", CAB_INICIO)
+    df
+}
+r <- verificar_inconsistencias_magistrados(rbind(mag("7", "10", "01/01/2019"), mag("7", "13", "10/03/2025")))
+checar("magistrado aposentado que depois falece NÃO é 'retorno'", nrow(r) == 0)
+r <- verificar_inconsistencias_magistrados(rbind(mag("8", "10", "01/01/2019"), mag("8", "8", "10/03/2025")))
+checar("magistrado aposentado que volta a atuar é apontado", any(r$`Verificação` == VERIFICACAO_MAG_APOSENTADORIA))
+
+# =====================================================
+cat("\n[L10] Pessoal e Auxiliar: base de dados e upload\n")
+# =====================================================
+
+dir_up <- file.path(tempdir(), "uploads_teste")
+dir.create(dir_up, showWarnings = FALSE)
+
+base_csv <- escrever_csv(c(
+    paste("CPF;Nome", CAB_ORGAO, CAB_SIT, "Cargo", CAB_INICIO, CAB_SAIDA, "Status", sep = ";"),
+    "11111111111;ANA;10;3;1;10/08/2026;;Ativo",
+    "11111111111;ANA;20;3;1;;;Inativo",
+    "22222222222;BRUNO;20;7;1;01/01/2020;;Inativo",
+    "22222222222;BRUNO;20;8;1;01/06/2024;;Inativo",
+    "33333333333;CARLA;20;1;4;01/01/2022;;Ativo"
+), file.path(dir_up, "base.csv"))
+
+alertas_csv <- escrever_csv(c(
+    paste("CPF;Nome", CAB_SIT, "Cargo", CAB_INICIO, CAB_ORGAO, "Alerta: Email", sep = ";"),
+    "99999999999;DANI;3;1;01/01/2026;20;E-mail não informado"
+), file.path(dir_up, "alertas.csv"))
+
+invalido_csv <- escrever_csv(c("Coluna A;Coluna B", "1;2"), file.path(dir_up, "notas.csv"))
+
+escrever_csv(c(
+    "Código Serventia;Nome da Serventia;Status;CEP",
+    "10;VARA DEZ;Inativo;49000000",
+    "20;VARA VINTE;Ativo;49000001"
+), file.path(pasta_serventias("TJSE"), "serventias.csv"))
+
+checar("planilha da base é reconhecida como base",
+       identificar_tipo_arquivo_pessoal(ler_arquivo_dados(base_csv, "csv")) == "base")
+checar("arquivo de alertas é reconhecido como alertas",
+       identificar_tipo_arquivo_pessoal(ler_arquivo_dados(alertas_csv, "csv")) == "alertas")
+checar("arquivo sem CPF/órgão não é reconhecido",
+       is.na(identificar_tipo_arquivo_pessoal(ler_arquivo_dados(invalido_csv, "csv"))))
+
+unlink(caminho_alertas("TJSE"), recursive = TRUE)
+
+testServer(mod_alertas_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+    session$setInputs(gerenciar_arquivos = 1)
+    session$setInputs(upload_arquivos_1 = data.frame(
+        name = c("../../x/qualquer_nome.csv", "../../MPRO/alertas_csv/evil.csv", "notas.csv"),
+        size = file.size(c(base_csv, alertas_csv, invalido_csv)),
+        type = "text/csv",
+        datapath = c(base_csv, alertas_csv, invalido_csv),
+        stringsAsFactors = FALSE
+    ))
+    session$setInputs(enviar_arquivos = 1)
+
+    checar("base gravada com o nome fixo na pasta própria",
+           identical(list.files(pasta_pessoal("TJSE")), "pessoal_auxiliar.csv"))
+    checar("alertas gravados na pasta da empresa com nome saneado",
+           identical(list.files(caminho_alertas("TJSE")), "evil.csv"))
+    checar("nada foi gravado fora da pasta da empresa", length(list.files(file.path(dir_teste, "data", "MPRO"), recursive = TRUE)) == 0)
+    checar("arquivo não reconhecido é ignorado", !any(grepl("notas", list.files(file.path(dir_teste, "data"), recursive = TRUE))))
+    checar("base carregada (5 registros)", nrow(dados_base()) == 5)
+
+    session$setInputs(base_status = "Ativo", base_cpf = "", base_nome = "", base_detalhe = "",
+                      base_cargo = "Todos", base_situacao = "Todos", base_orgao = "Todos")
+    session$elapse(500)
+    checar("filtro Status = Ativo", nrow(dados_base_filtrados()) == 2)
+
+    session$setInputs(base_status = "Todos", base_cpf = "111.111.111-11")
+    session$elapse(500)
+    checar("filtro CPF da base aceita pontuação", nrow(dados_base_filtrados()) == 2)
+
+    checar("órgão aparece como 'código - nome da serventia'",
+           any(base_exibicao()[[CAB_ORGAO]] == "10 - VARA DEZ"))
+    checar("cargo da base por extenso", any(grepl("^Servidor", base_exibicao()$Cargo)))
+
+    checar("inconsistências usam a base quando ela existe", usa_base())
+    r <- inconsistencias()
+    checar("lotação atual em serventia inativa é apontada (ANA, VARA DEZ)",
+           any(r$`Verificação` == VERIFICACAO_SERV_LOTACAO & r$CPF == "11111111111"))
+    checar("aposentado que faleceu não é apontado como retorno (BRUNO)",
+           !any(r$`Verificação` == VERIFICACAO_SERV_DEFINITIVA & r$CPF == "22222222222"))
+
+    # Nova base com uma já existente: pede confirmação e substitui.
+    session$setInputs(gerenciar_arquivos = 2)
+    session$setInputs(upload_arquivos_2 = data.frame(
+        name = "base2.csv", size = file.size(base_csv), type = "text/csv", datapath = base_csv
+    ))
+    session$setInputs(enviar_arquivos = 2)
+    checar("base nova aguarda confirmação quando já existe uma", !is.null(upload_pendente()))
+    session$setInputs(manter_existentes = 1)
+    checar("base substituída continua única", identical(list.files(pasta_pessoal("TJSE")), "pessoal_auxiliar.csv"))
+})
+
+# Cópia antes de apagar: se a cópia falha, o arquivo anterior fica.
+pasta_g <- file.path(tempdir(), "gravacao")
+dir.create(pasta_g, showWarnings = FALSE)
+antigo <- file.path(pasta_g, "serventias.xlsx")
+writeLines("antigo", antigo)
+ok <- suppressWarnings(gravar_arquivo_substituindo(file.path(pasta_g, "nao_existe.csv"), file.path(pasta_g, "serventias.csv"), antigo))
+checar("falha na cópia mantém o arquivo anterior", !ok && file.exists(antigo))
+novo <- file.path(pasta_g, "novo.csv"); writeLines("novo", novo)
+ok <- gravar_arquivo_substituindo(novo, file.path(pasta_g, "serventias.csv"), antigo)
+checar("cópia bem-sucedida substitui o anterior",
+       ok && !file.exists(antigo) && identical(readLines(file.path(pasta_g, "serventias.csv")), "novo") &&
+           length(list.files(pasta_g, all.files = TRUE, no.. = TRUE)) == 2)
+
+# Upload de Serventias: um .csv novo substitui um .xlsx antigo do mesmo tipo.
+pasta_srv <- pasta_serventias("TJSE")
+writeLines("antigo", file.path(pasta_srv, "serventias.xlsx"))
+srv_csv <- file.path(dir_up, "minha_base.csv")
+file.copy(file.path(pasta_srv, "serventias.csv"), srv_csv, overwrite = TRUE)
+unlink(file.path(pasta_srv, "serventias.csv"))
+testServer(mod_alertas_serventias_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+    session$setInputs(gerenciar_arquivos = 1)
+    session$setInputs(upload_serventias_1 = data.frame(
+        name = "../minha_base.csv", size = file.size(srv_csv), type = "text/csv", datapath = srv_csv
+    ))
+    session$setInputs(enviar_arquivos = 1)
+    session$setInputs(confirmar_substituir = 1)
+    checar("Serventias: .csv novo substitui o .xlsx antigo",
+           identical(list.files(pasta_srv), "serventias.csv"))
+    checar("Serventias: base nova carregada", nrow(dados_base()) == 2)
+})
+
+# Planilha de exemplo (opcional, fora do repositório):
+#   FAROLJUS_XLSX_EXEMPLO=/caminho/Quadro_pessoal_e_auxiliar_exemplo.xlsx Rscript tests/test_seguranca.R
+xlsx_exemplo <- Sys.getenv("FAROLJUS_XLSX_EXEMPLO")
+if (nzchar(xlsx_exemplo) && file.exists(xlsx_exemplo)) {
+    df_ex <- ler_arquivo_dados(xlsx_exemplo, "xlsx")
+    checar("planilha de exemplo (.xlsx) é reconhecida como base", identificar_tipo_arquivo_pessoal(df_ex) == "base")
+    checar("planilha de exemplo carrega todas as linhas", nrow(limpar_dados_lidos(df_ex)) == nrow(df_ex))
+    checar("verificações rodam sobre a planilha de exemplo",
+           is.data.frame(verificar_inconsistencias_servidores(limpar_dados_lidos(df_ex))))
+}
+
+# =====================================================
+cat("\n[L12] Painel: indicadores de Magistrados e Servidores\n")
+# =====================================================
+
+checar("códigos do MPM traduzidos (raça, gênero, sexo)",
+       identical(traduzir_dominio_painel(c("4", "05", "Branco(a)", "", "7"), RACA_COR_PAINEL),
+                 c("Negro(a)-Pardo(a)", "Negro(a)-Preto(a)", "Branco(a)", PAINEL_EM_BRANCO, PAINEL_NAO_DECLARADO)) &&
+           identical(traduzir_dominio_painel("1", IDENTIDADE_GENERO_PAINEL), "Cisgênero") &&
+           identical(traduzir_sexo_painel(c("F", "m", "Feminino", "N", NA)),
+                     c("Feminino", "Masculino", "Feminino", PAINEL_NAO_INFORMADO, PAINEL_EM_BRANCO)))
+checar("deficiência com vários códigos conta a pessoa uma vez e cada tipo",
+       identical(classificar_deficiencia_painel(tipos_deficiencia_painel(c("1, 3", "8", "10", "", "Não"))),
+                 c(PAINEL_COM_DEFICIENCIA, PAINEL_SEM_DEFICIENCIA, PAINEL_NAO_DECLARADO, PAINEL_EM_BRANCO, PAINEL_SEM_DEFICIENCIA)))
+checar("idade completa só depois do aniversário e faixas de 10 anos",
+       identical(idade_em_anos(as.Date(c("1980-10-16", "1980-10-17", "2020-01-01")), as.Date("2026-10-16")),
+                 c(46L, 45L, NA)) &&
+           identical(faixa_etaria_painel(c(29L, 30L, 75L)), c("Até 29 anos", "30 a 39 anos", "70 anos ou mais")))
+
+base_srv_painel <- data.frame(
+    CPF = c("11111111111", "11111111111", "22222222222", "3333333333", "44444444444"),
+    `Situação profissional atual` = c("3", "3", "7", "1", "3"),
+    Cargo = c("1", "1", "1", "4", "5"),
+    `Data de início da situação` = c("01/02/2020", "10/08/2026", "01/01/2020", "01/01/2022", "01/03/2023"),
+    `Data Nascimento` = c("15/06/1970", "", "01/01/1950", "20/12/1990", "05/05/2003"),
+    Sexo = c("F", "", "M", "M", "F"),
+    `Identidade de gênero` = c("1", "1", "1", "2", "9"),
+    `Raça / Cor` = c("4", "4", "2", "5", "6"),
+    `Deficiência` = c("8", "1,3", "8", "8", ""),
+    Status = c("Inativo", "Ativo", "Inativo", "Ativo", "Ativo"),
+    check.names = FALSE
+)
+ps <- pessoas_painel(base_srv_painel, PAINEL_SERVIDORES, SITUACOES_SERV_ENCERRADAS, CARGO_SERVIDOR, as.Date("2026-10-16"))$pessoas
+checar("painel conta cada CPF uma vez e tira aposentados",
+       nrow(ps) == 3 && !("22222222222" %in% ps$CPF) && "03333333333" %in% ps$CPF)
+ana <- ps[ps$CPF == "11111111111", ]
+checar("campo vazio no registro atual usa o último preenchido (sexo, nascimento)",
+       ana$sexo == "Feminino" && ana$idade == 56L && ana$deficiencia == PAINEL_COM_DEFICIENCIA &&
+           identical(ana$tipos_deficiencia[[1]], c("Física/motora", "Visual")))
+checar("cargo do servidor aparece por extenso", "Servidor(a) Comissionado(a) Sem vínculo" %in% ps$cargo)
+r_raca <- resumo_painel(ps$raca)
+checar("resumo põe \"sem informação\" no fim e soma 100%",
+       tail(r_raca$categoria, 1) == PAINEL_NAO_INFORMADO && abs(sum(r_raca$pct) - 100) < 1e-9)
+checar("tipos de deficiência são contados entre as pessoas com deficiência",
+       identical(resumo_tipos_deficiencia(ps)$n, c(1L, 1L)))
+sem_cols <- pessoas_painel(base_srv_painel[, c("CPF", "Cargo", "Situação profissional atual")],
+                           PAINEL_SERVIDORES, SITUACOES_SERV_ENCERRADAS, CARGO_SERVIDOR)
+checar("sem as colunas, os indicadores ficam vazios (não \"Em branco\")",
+       !sem_cols$colunas[["raca"]] && all(is.na(sem_cols$pessoas$raca)) && nrow(sem_cols$pessoas) == 3)
+exp_csv <- tabela_exportacao_painel(ps)
+checar("CSV do painel traz todos os indicadores",
+       all(c("Faixa etária", "Sexo", "Identidade de gênero", "Raça/cor", "Deficiência", "Cargo") %in% exp_csv$Indicador))
+
+# Bases da empresa TJSE para o servidor do painel.
+dir.create(pasta_pessoal("TJSE"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv2(base_srv_painel, file.path(pasta_pessoal("TJSE"), "pessoal_auxiliar.csv"))
+dir.create(pasta_magistrados("TJSE"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv2(data.frame(
+    CPF = c("55555555555", "66666666666"),
+    `Órgão de lotação do magistrado(a)` = c("10", "20"),
+    `Situação profissional atual` = c("8", "10"),
+    Cargo = c("3", "1"),
+    `Data de início da situação` = c("01/01/2015", "01/01/2010"),
+    `Data Nascimento` = c("01/01/1965", "01/01/1950"),
+    Sexo = c("F", "M"), `Identidade de gênero` = c("1", "1"),
+    `Raça / Cor` = c("2", "2"), `Deficiência` = c("8", "8"),
+    check.names = FALSE
+), file.path(pasta_magistrados("TJSE"), "magistrados.csv"))
+
+testServer(mod_painel_server, args = list(ativo = reactive(TRUE), empresa = reactive("TJSE"),
+                                          hoje = function() as.Date("2026-10-16")), {
+    session$flushReact()
+    p <- dados()$pessoas
+    checar("painel do servidor lê magistrados e servidores da empresa",
+           sum(p$publico == PAINEL_MAGISTRADOS) == 1 && sum(p$publico == PAINEL_SERVIDORES) == 3)
+    h <- paste(as.character(output$conteudo$html), collapse = "")
+    checar("painel mostra os seis indicadores",
+           all(vapply(c("Faixa etária", "Sexo", "Identidade de gênero", "Raça/cor", "Deficiência", "Cargo"),
+                      function(x) grepl(x, h, fixed = TRUE), logical(1))))
+    checar("com Todos, há comparativo Magistrados × Servidores", grepl("Comparativo Magistrados", h, fixed = TRUE))
+    session$setInputs(publico = PAINEL_MAGISTRADOS, cargo = "Todos")
+    checar("filtro Magistrados mostra só magistrados", nrow(pessoas_filtradas()) == 1)
+    session$setInputs(publico = PAINEL_SERVIDORES, cargo = "Estagiário(a)")
+    checar("filtro de cargo restringe as pessoas", nrow(pessoas_filtradas()) == 1)
+})
+
+limpar_auditoria()
+invisible(dbExecute(con, "UPDATE usuarios_totp SET ultimo_contador = NULL"))
+testServer(server, {
+    session$setInputs(entrar_totp = 0)
+    session$setInputs(usuario_totp = "maria", codigo_totp = totp_gerar(chave("maria")), entrar_totp = 1)
+    h <- paste(as.character(output$tela_principal$html), collapse = "")
+    p_serv <- pos_em(h, 'id="ir_serventias"')
+    p_painel <- pos_em(h, 'id="ir_painel"')
+    p_config <- pos_em(h, 'title="Configurações"')
+    checar("item Painel fica logo acima de Configurações",
+           p_painel > 0 && p_serv < p_painel && p_painel < p_config)
+    checar("tela do Painel existe para usuário comum", grepl('data-value="Painel"', h, fixed = TRUE))
+    session$setInputs(ir_painel = 1)
+    checar("menu Painel abre o painel", menuSelecionado() == ABA_PAINEL)
+})
+checar("lotações ativas sem nenhuma linha têm chave texto (Serventias junta as duas)",
+       is.character(lotacoes_ativas_pessoas(base_srv_painel, REGEX_COL_ORGAO_SERVIDOR, SITUACOES_SERV_ENCERRADAS)$chave))
+ui_app <- paste(as.character(ui), collapse = "")
+checar("janela \"Processando os dados\" do Painel existe e começa oculta",
+       grepl('id="painel-processando"', ui_app, fixed = TRUE) && grepl('aria-hidden="true"', ui_app, fixed = TRUE) &&
+           grepl("window.farolPainelProcessando = function", codigo_app, fixed = TRUE))
+limpar_auditoria()
+invisible(dbExecute(con, "UPDATE usuarios_totp SET ultimo_contador = NULL"))
+testServer(server, {
+    session$setInputs(entrar_totp = 0)
+    session$setInputs(usuario_totp = "maria", codigo_totp = totp_gerar(chave("maria")), entrar_totp = 1)
+    h <- paste(as.character(output$tela_principal$html), collapse = "")
+    checar("clique em Painel abre a janela de processamento",
+           grepl('id="ir_painel"[^>]*onclick="window.farolPainelProcessando', h) ||
+               grepl('onclick="window.farolPainelProcessando[^"]*"[^>]*id="ir_painel"', h))
+})
+
+# =====================================================
+cat("\n[L13] Pessoal e Auxiliar: aba Envio e Gerenciar Arquivos\n")
+# =====================================================
+
+# Mesmas colunas da base (o arquivo de envio do MPM não tem Status).
+envio_csv <- escrever_csv(c(
+    paste("CPF;Nome", CAB_ORGAO, CAB_SIT, "Cargo", CAB_INICIO, CAB_SAIDA, sep = ";"),
+    "44444444444;DIEGO;20;3;1;01/09/2026;",
+    "55555555555;ELIS;10;2;5;10/09/2026;30/09/2026",
+    "66666666666;FABIO;20;3;1;15/09/2026;"
+), file.path(dir_up, "quadro_pessoal_e_auxiliar_envio.csv"))
+
+df_envio <- ler_arquivo_dados(envio_csv, "csv")
+checar("arquivo com \"envio\" no nome é reconhecido como envio",
+       identificar_tipo_arquivo_pessoal(df_envio, "quadro_pessoal_e_auxiliar_envio.csv") == "envio" &&
+           identificar_tipo_arquivo_pessoal(df_envio, "Pessoal Auxiliar - ENVIO.xlsx") == "envio")
+checar("mesmo arquivo sem \"envio\" no nome continua sendo base",
+       identificar_tipo_arquivo_pessoal(df_envio, "pessoal_auxiliar.csv") == "base" &&
+           identificar_tipo_arquivo_pessoal(df_envio, "reenviado.csv") == "base")
+checar("alertas com \"envio\" no nome continuam sendo alertas",
+       identificar_tipo_arquivo_pessoal(ler_arquivo_dados(alertas_csv, "csv"), "alertas_envio.csv") == "alertas")
+
+testServer(mod_alertas_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+    session$flushReact()
+    n_base <- nrow(dados_base())
+    session$setInputs(gerenciar_arquivos = 1)
+    session$setInputs(upload_arquivos_1 = data.frame(
+        name = "quadro_pessoal_e_auxiliar_envio.csv", size = file.size(envio_csv),
+        type = "text/csv", datapath = envio_csv, stringsAsFactors = FALSE
+    ))
+    session$setInputs(enviar_arquivos = 1)
+    checar("envio gravado com o nome fixo, ao lado da base",
+           setequal(list.files(pasta_pessoal("TJSE")), c("pessoal_auxiliar.csv", "pessoal_auxiliar_envio.csv")))
+    checar("envio carregado sem mexer na base", nrow(dados_envio()) == 3 && n_base > 0 && nrow(dados_base()) == n_base)
+
+    session$setInputs(envio_status = "Ativo", envio_cpf = "", envio_nome = "", envio_detalhe = "",
+                      envio_cargo = "Todos", envio_situacao = "Todos", envio_orgao = "Todos")
+    session$elapse(500)
+    checar("envio sem coluna Status: filtro Ativo não esconde registros", nrow(dados_envio_filtrados()) == 3)
+    session$setInputs(envio_cargo = "Estagiário(a)")
+    session$elapse(500)
+    checar("filtro de cargo do envio (por extenso)", nrow(dados_envio_filtrados()) == 1)
+    session$setInputs(envio_cargo = "Todos", envio_nome = "fáb")
+    session$elapse(500)
+    checar("filtro de nome do envio ignora acento", nrow(dados_envio_filtrados()) == 1)
+    session$setInputs(envio_nome = "", envio_orgao = "10 - VARA DEZ")
+    session$elapse(500)
+    checar("filtro de órgão do envio usa o nome da serventia", nrow(dados_envio_filtrados()) == 1)
+    session$setInputs(envio_limpar_filtros = 1)
+    checar("filtros da base não são afetados pelo envio", nrow(dados_base_filtrados()) > 0)
+
+    h <- paste(as.character(tagList(
+        linha_cadastro(arquivos_base_pessoal(pasta_pessoal("TJSE")), RADICAL_BASE_PESSOAL, "Base de Dados - Pessoal e Auxiliar", "apagar_base"),
+        linha_cadastro(arquivos_envio_pessoal(pasta_pessoal("TJSE")), RADICAL_ENVIO_PESSOAL, "Envio - Pessoal e Auxiliar", "apagar_envio")
+    )), collapse = "")
+    checar("Gerenciar Arquivos mostra base e envio com data de atualização",
+           grepl("pessoal_auxiliar.csv", h, fixed = TRUE) && grepl("pessoal_auxiliar_envio.csv", h, fixed = TRUE) &&
+               length(gregexpr("atualizado em \\d{2}/\\d{2}/\\d{4} \\d{2}:\\d{2}", h)[[1]]) == 2)
+    h_vazio <- as.character(linha_cadastro(character(0), RADICAL_ENVIO_PESSOAL, "Envio - Pessoal e Auxiliar", "apagar_envio"))
+    checar("sem envio, a linha diz \"ainda não enviado\" e não tem Apagar",
+           grepl("ainda não enviado", h_vazio, fixed = TRUE) && !grepl("apagar_envio", h_vazio, fixed = TRUE))
+    checar("data dos alertas é a do arquivo mais recente",
+           data_atualizacao(arquivos_alertas_existentes()) ==
+               format(max(file.info(arquivos_alertas_existentes())$mtime), "%d/%m/%Y %H:%M"))
+
+    # Novo envio com um já existente: pede confirmação e substitui.
+    session$setInputs(gerenciar_arquivos = 2)
+    session$setInputs(upload_arquivos_2 = data.frame(
+        name = "Envio MPM.csv", size = file.size(envio_csv), type = "text/csv", datapath = envio_csv
+    ))
+    session$setInputs(enviar_arquivos = 2)
+    checar("envio novo aguarda confirmação quando já existe um", !is.null(upload_pendente()))
+    session$setInputs(manter_existentes = 2)
+    checar("envio substituído continua único",
+           sum(list.files(pasta_pessoal("TJSE")) == "pessoal_auxiliar_envio.csv") == 1)
+
+    session$setInputs(apagar_envio = 1)
+    session$setInputs(confirmar_apagar_pasta = 1)
+    checar("Apagar envio remove só o envio",
+           identical(list.files(pasta_pessoal("TJSE")), "pessoal_auxiliar.csv") && nrow(dados_envio()) == 0)
+})
+
+# Arquivo de envio real (opcional, fora do repositório):
+#   FAROLJUS_XLSX_ENVIO=/caminho/quadro_pessoal_e_auxiliar_envio.xlsx Rscript tests/test_seguranca.R
+xlsx_envio <- Sys.getenv("FAROLJUS_XLSX_ENVIO")
+if (nzchar(xlsx_envio) && file.exists(xlsx_envio)) {
+    df_env <- ler_arquivo_dados(xlsx_envio, "xlsx")
+    checar("planilha de envio (.xlsx) é reconhecida como envio",
+           identificar_tipo_arquivo_pessoal(df_env, basename(xlsx_envio)) == "envio")
+    checar("planilha de envio carrega todas as linhas", nrow(limpar_dados_lidos(df_env)) == nrow(df_env))
+}
+
+# =====================================================
+cat("\n[L14] Envio: Gerar Novo Envio (Duplicidade no próprio Tribunal) e tabelas\n")
+# =====================================================
+
+CAB_NASC <- "Data Nascimento"
+env_dup <- data.frame(
+    CPF = c("1001715594", "22222222222", "77777777777", "99999999999", "12345678901"),
+    Nome = c("JULIA", "BRUNO", "SEM BASE", "APOSENTADO", "CHEFE"),
+    `Órgão de lotação do(a) Servidor(a) ou Auxiliar` = c("8582", "20", "30", "30", "40"),
+    `Situação profissional atual` = c("2", "3", "3", "3", "1"),
+    Cargo = c("1", "1", "5", "1", "1"),
+    `Data de início da situação` = c("01/09/2026", "10/09/2026", "01/09/2026", "01/09/2026", "05/09/2026"),
+    `Data Nascimento` = c("16/03/1989", "01/01/1980", "01/01/2000", "01/01/1960", "01/01/1975"),
+    Email = c("julia@tj.jus.br", "", "x@tj.jus.br", "", ""),
+    `Data de saída da situação` = c("", "", "", "", ""),
+    `Exclusão de registro por erro` = c("N", "N", "N", "N", "N"),
+    check.names = FALSE
+)
+base_dup <- data.frame(
+    CPF = c("01001715594", "01001715594", "01001715594", "22222222222", "99999999999", "99999999999", "12345678901"),
+    Nome = c("JULIA", "JULIA", "JULIA", "BRUNO", "APOSENTADO", "APOSENTADO", "CHEFE"),
+    `Órgão de lotação do(a) Servidor(a) ou Auxiliar` = c("32", "40", "50", "20", "30", "30", "40"),
+    `Situação profissional atual` = c("3", "1", "2", "3", "3", "7", "3"),
+    Cargo = c("1", "1", "1", "1", "1", "1", "1"),
+    `Data de início da situação` = c("01/01/2015", "01/03/2020", "01/09/2026", "15/09/2026", "01/01/2010", "01/01/2024", "01/02/2022"),
+    `Data de saída da situação` = c("28/02/2020", "", "", "", "31/12/2023", "", ""),
+    Status = c("Inativo", "Ativo", "Ativo", "Ativo", "Inativo", "Inativo", "Ativo"),
+    `Data Nascimento` = c("16/03/1989", "45000", "16/03/1989", "01/01/1980", "01/01/1960", "01/01/1960", "01/01/1975"),
+    check.names = FALSE
+)
+alertas_dup <- data.frame(
+    CPF = c("1001715594", "22222222222", "77777777777", "88888888888", "33333333333", "99999999999", "12345678901"),
+    `Conflito: Duplicidade no próprio Tribunal` = c("Registro duplicado", "Registro duplicado", "x", "x", NA, "x", "x"),
+    `Alerta: Email` = c(NA, "E-mail não informado", NA, NA, "E-mail não informado", NA, NA),
+    check.names = FALSE
+)
+r_dup <- gerar_novo_envio_duplicidade(env_dup, base_dup, alertas_dup)
+d_dup <- r_dup$dados
+checar("novo envio tem as colunas do envio, na mesma ordem", identical(names(d_dup), names(env_dup)))
+checar("CPFs com o conflito são encontrados (com e sem zero à esquerda)",
+       setequal(r_dup$cpfs_conflito, c("01001715594", "22222222222", "77777777777", "88888888888", "99999999999", "12345678901")))
+checar("duas linhas por CPF com envio e base anterior em situação 1, 2 ou 3 (JULIA e CHEFE)",
+       nrow(d_dup) == 4 && identical(d_dup$Nome, c("JULIA", "JULIA", "CHEFE", "CHEFE")))
+checar("base em situação fora de 1, 2 ou 3 não gera linhas (APOSENTADO, situação 7)",
+       identical(r_dup$fora_situacao, "99999999999") && !("APOSENTADO" %in% d_dup$Nome))
+chefe <- d_dup[d_dup$Nome == "CHEFE", ][1, ]
+base_chefe <- base_dup[base_dup$Nome == "CHEFE", ]
+checar("linha da base muda só a Data de saída (situação 3, demais campos iguais à base)",
+       chefe$`Data de saída da situação` == "05/09/2026" &&
+           all(vapply(setdiff(intersect(names(env_dup), names(base_dup)), "Data de saída da situação"),
+                      function(c) identical(as.character(chefe[[c]]), as.character(base_chefe[[c]])), logical(1))))
+checar("1ª linha: registro da base mais recente com início ANTES do envio",
+       d_dup$`Órgão de lotação do(a) Servidor(a) ou Auxiliar`[1] == "40" &&
+           d_dup$`Data de início da situação`[1] == "01/03/2020" && d_dup$CPF[1] == "01001715594")
+checar("1ª linha: Data de saída = Data de início do envio",
+       d_dup$`Data de saída da situação`[1] == "01/09/2026")
+checar("2ª linha: registro do envio exatamente igual",
+       identical(unname(unlist(d_dup[2, ])), unname(unlist(env_dup[1, ]))))
+checar("códigos de Cargo e Situação saem como no arquivo (não por extenso)",
+       all(d_dup$Cargo == "1") && identical(d_dup$`Situação profissional atual`, c("1", "2", "3", "1")))
+checar("coluna do envio que a base não tem sai vazia (Email da base)", d_dup$Email[1] == "")
+checar("data serial do Excel sai em dd/mm/aaaa", d_dup$`Data Nascimento`[1] == format(as.Date(45000, origin = "1899-12-30"), "%d/%m/%Y"))
+checar("CPF fora do envio e CPF sem base anterior são informados",
+       setequal(r_dup$sem_envio, "88888888888") && setequal(r_dup$sem_base, c("22222222222", "77777777777")))
+checar("sem conflito de duplicidade, nada é gerado",
+       nrow(gerar_novo_envio_duplicidade(env_dup, base_dup, alertas_dup[, c(1, 3)])$dados) == 0)
+
+arq_novo <- tempfile(fileext = ".csv")
+readr::write_excel_csv2(d_dup, arq_novo, na = "")
+releitura <- ler_arquivo_dados(arq_novo, "csv")
+checar("CSV do novo envio relido igual (separador ;, cabeçalho do envio)",
+       identical(names(releitura), names(env_dup)) && identical(as.character(releitura$CPF), c("01001715594", "1001715594", "12345678901", "12345678901")))
+
+# Pelo módulo: botão e download.
+unlink(caminho_alertas("TJSE"), recursive = TRUE)
+dir.create(caminho_alertas("TJSE"), recursive = TRUE, showWarnings = FALSE)
+readr::write_excel_csv2(alertas_dup, file.path(caminho_alertas("TJSE"), "alertas_dup.csv"), na = "")
+readr::write_excel_csv2(base_dup, file.path(pasta_pessoal("TJSE"), "pessoal_auxiliar.csv"), na = "")
+readr::write_excel_csv2(env_dup, file.path(pasta_pessoal("TJSE"), "pessoal_auxiliar_envio.csv"), na = "")
+testServer(mod_alertas_server, args = list(empresa = reactive("TJSE"), ativo = reactive(TRUE)), {
+    session$flushReact()
+    checar("módulo monta o novo envio a partir dos arquivos da empresa", nrow(novo_envio()$dados) == 4)
+    h <- paste(as.character(output$envio_csv_ui$html), collapse = "")
+    checar("aba Gerar arquivo CSV do Envio tem o botão Gerar Novo Envio",
+           grepl("novo_envio_ui", h, fixed = TRUE) &&
+               grepl("Gerar Novo Envio", paste(as.character(output$novo_envio_ui$html), collapse = ""), fixed = TRUE))
+    h2 <- paste(as.character(output$novo_envio_ui$html), collapse = "")
+    checar("botão Gerar Novo Envio fica ativo quando há linhas", grepl('id="proxy1-novo_envio_download"', h2, fixed = TRUE))
+    arq <- output$novo_envio_download
+    d <- ler_arquivo_dados(arq, "csv")
+    checar("download do novo envio traz as linhas dos dois CPFs", nrow(d) == 4 && d$`Data de saída da situação`[1] == "01/09/2026")
+    h_base <- paste(as.character(output$base_csv_ui$html), collapse = "")
+    checar("Base de Dados não tem o botão Gerar Novo Envio", !grepl("Gerar Novo Envio", h_base, fixed = TRUE))
+})
+
+ui_pessoal <- paste(as.character(mod_alertas_ui("alertas")), collapse = "")
+checar("abas do Pessoal e Auxiliar sem \"- Pessoal e Auxiliar\" no nome",
+       all(vapply(c("Base de Dados", "Envio", "Alertas", "Inconsistências"), function(x) grepl(x, ui_pessoal, fixed = TRUE), logical(1))) &&
+           !grepl("Base de Dados - Pessoal e Auxiliar</a>", ui_pessoal, fixed = TRUE) &&
+           !grepl("> Alertas - Pessoal e Auxiliar", ui_pessoal, fixed = TRUE))
+checar("tabelas não forçam mais 100% de largura (desalinhava o cabeçalho)",
+       !any(grepl("table\\.dataTable \\{\\s*width: 100%", unlist(lapply(list.files(file.path(dir_teste, "modules"), full.names = TRUE),
+                                                                     function(f) paste(readLines(f, warn = FALSE), collapse = " "))))))
+checar("app realinha as colunas quando a largura muda",
+       grepl("columns.adjust()", codigo_app, fixed = TRUE) && grepl("transitionend", codigo_app, fixed = TRUE))
+
+# =====================================================
+cat("\n[L15] Pessoal e Auxiliar: aba sem arquivo (janela de aviso e filtros bloqueados)\n")
+# =====================================================
+
+erro_saida <- function(expr) tryCatch({ force(expr); NA_character_ }, error = function(e) conditionMessage(e))
+
+unlink(file.path(dir_teste, "data", "MPRO"), recursive = TRUE)
+testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "base")
+    checar("Base de Dados sem arquivo abre a janela de aviso", identical(alerta_sem_arquivo_aberto(), "base"))
+    session$setInputs(secao = "envio")
+    checar("Envio sem arquivo abre a janela de aviso", identical(alerta_sem_arquivo_aberto(), "envio"))
+    session$setInputs(secao = "alertas")
+    checar("Alertas sem arquivo abre a janela de aviso", identical(alerta_sem_arquivo_aberto(), "alertas"))
+    session$setInputs(secao = "inconsistencias")
+    checar("Inconsistências não abre a janela de aviso", identical(alerta_sem_arquivo_aberto(), "alertas"))
+    checar("filtros de Base, Envio e Alertas bloqueados sem arquivo", all(filtros_bloqueados()))
+    checar("mensagem do Envio vai para a janela, não para a tabela",
+           grepl("pessoal_auxiliar_envio", ABAS_COM_ARQUIVO$envio$mensagem(), fixed = TRUE) &&
+               identical(erro_saida(output$envio_tabela), ""))
+    checar("tabela da Base fica vazia, sem mensagem", identical(erro_saida(output$base_tabela), ""))
+    n_up <- contador_upload()
+    session$setInputs(sem_arquivo_gerenciar = 1)
+    checar("botão Gerenciar Arquivos da janela abre o Gerenciar Arquivos", contador_upload() == n_up + 1)
+})
+
+dir.create(pasta_pessoal("MPRO"), recursive = TRUE, showWarnings = FALSE)
+invisible(file.copy(base_csv, file.path(pasta_pessoal("MPRO"), "pessoal_auxiliar.csv")))
+testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "base")
+    checar("Base de Dados com arquivo não abre a janela", is.null(alerta_sem_arquivo_aberto()))
+    b <- filtros_bloqueados()
+    checar("com a base enviada, só os filtros da Base ficam liberados",
+           !b[["base"]] && b[["envio"]] && b[["alertas"]])
+})
+
+ativo_teste <- reactiveVal(FALSE)
+unlink(pasta_pessoal("MPRO"), recursive = TRUE)
+testServer(mod_alertas_server, args = list(empresa = reactive("MPRO"), ativo = ativo_teste), {
+    session$setInputs(secao = "envio")
+    checar("módulo fechado não abre a janela", is.null(alerta_sem_arquivo_aberto()))
+    ativo_teste(TRUE)
+    session$flushReact()
+    checar("abrir o módulo numa aba sem arquivo abre a janela", identical(alerta_sem_arquivo_aberto(), "envio"))
+})
+
+ui_p <- paste(as.character(mod_alertas_ui("alertas")), collapse = "")
+checar("blocos de filtros de Base, Envio e Alertas têm id (alvo do bloqueio)",
+       all(vapply(c("alertas-base_filtros", "alertas-envio_filtros", "alertas-alertas_filtros",
+                    "alertas-base_grafico_controles", "alertas-envio_grafico_controles"),
+                  function(x) grepl(sprintf('id="%s"', x), ui_p, fixed = TRUE), logical(1))))
+checar("app tem o handler que bloqueia os filtros",
+       grepl("'bloquear-filtros'", codigo_app, fixed = TRUE) && grepl("selectize.disable()", codigo_app, fixed = TRUE))
 
 # =====================================================
 
