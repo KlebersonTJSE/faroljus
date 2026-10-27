@@ -400,11 +400,11 @@ checar("consolidação vetorizada = antiga",
 # Tabelas auxiliares: semeadas no SQLite e lidas para as constantes.
 checar("tabelas auxiliares semeadas no SQLite",
        dbGetQuery(con, "SELECT COUNT(*) n FROM tab_cargo_servidor")$n == length(CARGO_SERVIDOR))
-invisible(dbExecute(con, "UPDATE tab_cargo_servidor SET nomenclatura = 'Estagiário(a) TESTE' WHERE codigo = 5"))
-carregar_tabelas_auxiliares(con)
+invisible(dbExecute(con, "UPDATE tab_cargo_servidor SET descricao = 'Estagiário(a) TESTE' WHERE codigo = '5'"))
+carregar_tabelas_referencia(con)
 checar("ajuste feito no banco vale para a tradução", unname(CARGO_SERVIDOR["5"]) == "Estagiário(a) TESTE")
-invisible(dbExecute(con, "UPDATE tab_cargo_servidor SET nomenclatura = 'Estagiário(a)' WHERE codigo = 5"))
-carregar_tabelas_auxiliares(con)
+invisible(dbExecute(con, "UPDATE tab_cargo_servidor SET descricao = 'Estagiário(a)' WHERE codigo = '5'"))
+carregar_tabelas_referencia(con)
 
 # =====================================================
 cat("\n[10] Módulos: carga sob demanda\n")
@@ -607,9 +607,9 @@ mag <- function(cpf, sit, inicio) {
     names(df) <- c("CPF", "Nome", "Órgão de lotação do magistrado(a)", CAB_SIT, "Cargo", CAB_INICIO)
     df
 }
-r <- verificar_inconsistencias_magistrados(rbind(mag("7", "10", "01/01/2019"), mag("7", "13", "10/03/2025")))
+r <- verificar_inconsistencias_magistrados(rbind(mag("7", "12", "01/01/2019"), mag("7", "13", "10/03/2025")))
 checar("magistrado aposentado que depois falece NÃO é 'retorno'", nrow(r) == 0)
-r <- verificar_inconsistencias_magistrados(rbind(mag("8", "10", "01/01/2019"), mag("8", "8", "10/03/2025")))
+r <- verificar_inconsistencias_magistrados(rbind(mag("8", "12", "01/01/2019"), mag("8", "8", "10/03/2025")))
 checar("magistrado aposentado que volta a atuar é apontado", any(r$`Verificação` == VERIFICACAO_MAG_APOSENTADORIA))
 
 # =====================================================
@@ -780,7 +780,7 @@ ana <- ps[ps$CPF == "11111111111", ]
 checar("campo vazio no registro atual usa o último preenchido (sexo, nascimento)",
        ana$sexo == "Feminino" && ana$idade == 56L && ana$deficiencia == PAINEL_COM_DEFICIENCIA &&
            identical(ana$tipos_deficiencia[[1]], c("Física/motora", "Visual")))
-checar("cargo do servidor aparece por extenso", "Servidor(a) Comissionado(a) Sem vínculo" %in% ps$cargo)
+checar("cargo do servidor aparece por extenso", "Servidor(a) comissionado(a) sem vínculo" %in% ps$cargo)
 r_raca <- resumo_painel(ps$raca)
 checar("resumo põe \"sem informação\" no fim e soma 100%",
        tail(r_raca$categoria, 1) == PAINEL_NAO_INFORMADO && abs(sum(r_raca$pct) - 100) < 1e-9)
@@ -801,7 +801,7 @@ dir.create(pasta_magistrados("TJSE"), recursive = TRUE, showWarnings = FALSE)
 readr::write_csv2(data.frame(
     CPF = c("55555555555", "66666666666"),
     `Órgão de lotação do magistrado(a)` = c("10", "20"),
-    `Situação profissional atual` = c("8", "10"),
+    `Situação profissional atual` = c("8", "12"),
     Cargo = c("3", "1"),
     `Data de início da situação` = c("01/01/2015", "01/01/2010"),
     `Data Nascimento` = c("01/01/1965", "01/01/1950"),
@@ -1214,7 +1214,7 @@ mag_base_ne <- data.frame(
     Nome = c("JAIR", "JAIR", "JAIR", "ANA", "BRUNO", "CARLA"),
     `Órgão de lotação do magistrado(a)` = c("32", "32", "8673", "10", "20", "30"),
     Cargo = c("2", "2", "1", "2", "2", "2"),
-    `Situação profissional atual` = c("8", "10", "8", "8", "10", "8"),
+    `Situação profissional atual` = c("8", "12", "8", "8", "12", "8"),
     `Data de início da situação` = c("17/10/2018", "18/01/2025", "14/09/2026", "01/01/2020", "01/01/2020", "01/01/2020"),
     `Data de saída da situação` = c("", "", "", "", "", "01/06/2026"),
     Status = c("Ativo", "Inativo", "Ativo", "Ativo", "Inativo", "Inativo"),
@@ -1246,7 +1246,7 @@ checar("Magistrados: CPFs com o alerta \"cargos distintos ativos\" (com e sem ze
 checar("Magistrados: alerta de outro tipo não entra", !("66666666666" %in% rm_$cpfs_conflito))
 checar("Magistrados: duas linhas só para quem tem registro em aberto de outro cargo (JAIR)",
        nrow(dm) == 2 && identical(dm$Nome, c("JAIR", "JAIR")))
-checar("Magistrados: 1ª linha é o registro em aberto de outro cargo (cargo 2, 2018), não o encerrado (situação 10)",
+checar("Magistrados: 1ª linha é o registro em aberto de outro cargo (cargo 2, 2018), não o encerrado (situação 12)",
        dm$Cargo[1] == "2" && dm$`Data de início da situação`[1] == "17/10/2018" && dm$`Situação profissional atual`[1] == "8")
 checar("Magistrados: 1ª linha recebe Data de saída = início do envio (serial do Excel em dd/mm/aaaa)",
        dm$`Data de saída da situação`[1] == format(as.Date(46279, origin = "1899-12-30"), "%d/%m/%Y"))
@@ -1339,10 +1339,10 @@ checar("vetores de referência carregados para a aplicação",
 checar("vários códigos na mesma célula, zero à esquerda e código desconhecido",
        identical(codigos_para_nomes(c("366, 1546", "0291", "9999", NA, ""), REF_MUNICIPIOS),
                  c("AREIA BRANCA; DIVINA PASTORA", "ARACAJU", "9999", NA, "")))
-invisible(dbExecute(con, "UPDATE tab_competencia SET descricao = 'Vara Única' WHERE codigo = 1"))
+invisible(dbExecute(con, "UPDATE tab_competencia SET descricao = 'Vara Única' WHERE codigo = '1'"))
 carregar_tabelas_referencia(con)
 checar("ajuste no banco é preservado (o CSV não sobrescreve)", unname(REF_COMPETENCIAS["1"]) == "Vara Única")
-invisible(dbExecute(con, "UPDATE tab_competencia SET descricao = 'Juízo Único' WHERE codigo = 1"))
+invisible(dbExecute(con, "UPDATE tab_competencia SET descricao = 'Juízo Único' WHERE codigo = '1'"))
 carregar_tabelas_referencia(con)
 
 srv_ref <- data.frame(
@@ -1356,8 +1356,8 @@ t_ref <- traduzir_referencias_serventias(srv_ref)
 checar("Serventias: município, competência, tipo e classificação por nome; S/N vira Sim/Não",
        identical(t_ref$`Municípios Abrangidos`, c("AREIA BRANCA", "DIVINA PASTORA; ARACAJU")) &&
            identical(t_ref$`Competências`, c("Juízo Único", "Cível; Criminal")) &&
-           identical(t_ref$`Tipo de Unidade Judiciária`, c("Unidade Judiciária de 1º grau",
-                                                           "Unidade Judiciária de 2º grau ou de tribunal superior")) &&
+           identical(t_ref$`Tipo de Unidade Judiciária`, c("Unidades judiciárias de primeiro grau",
+                                                           "Unidades judiciárias de segundo grau ou de tribunais superiores")) &&
            grepl("^Gab2", t_ref$`Classificação da Unidade Judiciária`[2]) &&
            identical(t_ref$`Juizo 100% Digital`, c("Sim", "Não")) && identical(t_ref$`Balcão Virtual`, c("Sim", "")))
 checar("Serventias: CEP, código e entrância continuam como no arquivo",
@@ -1391,6 +1391,145 @@ testServer(mod_serventias_server, args = list(empresa = reactive("MPRO"), ativo 
     n <- novo_envio()$dados
     checar("Serventias (módulo): Gerar Novo Envio continua com os códigos",
            nrow(n) == 1 && n$`Municípios Abrangidos` == "1546;291" && n$`Competências` == "2, 3")
+})
+
+# =====================================================
+cat("\n[15] Tabelas Auxiliares do MPM: banco, telas e Gerenciar Arquivos\n")
+# =====================================================
+
+esperado <- c(tab_cargo_magistrado = 11, tab_situacao_profissional_magistrado = 19, tab_forma_promocao_magistrado = 9,
+              tab_cargo_servidor = 14, tab_situacao_profissional_servidor = 12, tab_area_atuacao = 7, tab_sexo = 5,
+              tab_identidade_genero = 9, tab_raca_cor = 7, tab_deficiencia = 10, tab_regime_cotas = 8,
+              tab_competencia = 39, tab_tipo_unidade = 4, tab_classificacao_unidade = 46, tab_entrancia = 5,
+              tab_municipio = 75)
+contagens <- vapply(names(esperado), n_tab, numeric(1))
+checar("as 16 tabelas auxiliares foram gravadas no SQLite com todos os registros", all(contagens == esperado))
+checar("numeração oficial do MPM para magistrados (cargo 4 = Desembargador(a), situação 12 = Aposentado(a))",
+       unname(CARGO_MAGISTRADO["4"]) == "Desembargador(a)" && unname(CARGO_MAGISTRADO["3"]) == "Juiz(a) Substituto(a) de 2º grau" &&
+           unname(SITUACAO_PROFISSIONAL_MAGISTRADO["12"]) == "Aposentado(a)" &&
+           unname(SITUACAO_PROFISSIONAL_MAGISTRADO["10"]) == "Licenças ou Concessões previstas em lei")
+checar("servidor: situação 4 (Cargo de Assessoramento) e cargo 14 vêm da tabela do MPM",
+       unname(SITUACAO_PROFISSIONAL_SERVIDOR["4"]) == "Cargo de Assessoramento" && !is.na(CARGO_SERVIDOR["14"]))
+checar("situações encerradas de magistrados seguem a tabela do MPM",
+       setequal(SITUACOES_MAG_ENCERRADAS, c("12", "13", "14", "15", "17")))
+origem <- dbGetQuery(con, "SELECT tabela, arquivo, local FROM tab_carga_referencia")
+checar("origem registrada: competências do CSV específico, cargos da planilha do MPM",
+       origem$arquivo[origem$tabela == "tab_competencia"] == "competencias.csv" &&
+           origem$arquivo[origem$tabela == "tab_cargo_magistrado"] == "tabelas_auxiliares_mpm.xlsx" &&
+           all(origem$local == "padrao"))
+checar("tipo de unidade responde pela sigla e classificação sem \";\" no fim",
+       unname(REF_TIPOS_UNIDADE["UJ1"]) == "Unidades judiciárias de primeiro grau" &&
+           !any(grepl(";$", REF_CLASSIFICACOES_UNIDADE)))
+
+# Ajuste no banco é preservado enquanto o arquivo não muda; forçar recarrega.
+invisible(dbExecute(con, "UPDATE tab_sexo SET descricao = 'Fem.' WHERE codigo = 'F'"))
+carregar_tabelas_referencia(con)
+checar("ajuste no banco preservado na recarga normal", unname(REF_SEXOS["F"]) == "Fem.")
+carregar_tabelas_referencia(con, forcar = TRUE)
+checar("recarga forçada volta ao arquivo", unname(REF_SEXOS["F"]) == "Feminino")
+
+# Banco de versão anterior (tab_cargo_servidor com "nomenclatura").
+invisible(dbExecute(con, "DROP TABLE tab_cargo_servidor"))
+invisible(dbExecute(con, "CREATE TABLE tab_cargo_servidor (codigo INTEGER PRIMARY KEY, nomenclatura TEXT NOT NULL)"))
+invisible(dbExecute(con, "INSERT INTO tab_cargo_servidor VALUES (1, 'antigo')"))
+carregar_tabelas_referencia(con)
+checar("tabela no formato antigo é recriada e recarregada do arquivo",
+       identical(dbListFields(con, "tab_cargo_servidor"), c("codigo", "descricao")) && n_tab("tab_cargo_servidor") == 14)
+
+checar("identificação dos arquivos de referência",
+       identical(identificar_arquivo_referencia(file.path(PASTA_REFERENCIAS, "tabelas_auxiliares_mpm.xlsx")), "mpm") &&
+           identical(identificar_arquivo_referencia(file.path(PASTA_REFERENCIAS, "municipios.csv")), "municipios") &&
+           identical(identificar_arquivo_referencia(file.path(PASTA_REFERENCIAS, "competencias.csv")), "competencias") &&
+           identical(identificar_arquivo_referencia(file.path(PASTA_REFERENCIAS, "tipos_classificacao_unidade.csv")), "classificacao"))
+arq_ruim <- tempfile(fileext = ".csv"); writeLines(c("a;b", "1;2"), arq_ruim)
+checar("CSV qualquer não é reconhecido", is.na(identificar_arquivo_referencia(arq_ruim)))
+
+# Descrições nas telas (cadastro de pessoas).
+pessoas_ref <- data.frame(
+    Sexo = c("M", "f", "NDR"), `Identidade de gênero` = c("1", "9", ""), `Raça / Cor` = c("2", "4", "99"),
+    `Deficiência` = c("8", "1, 3", NA), `Foi aprovado(a) em Regime de Cotas` = c("1", "2", "6"),
+    `Forma de promoção Desembargador(a)/Juiz(a) Titular` = c("6", "", "3"), `Área de atuação` = c("4", "2", "6"),
+    `Alerta: Sexo` = c("M", "", ""), check.names = FALSE
+)
+tp <- traduzir_descricoes_mpm(pessoas_ref)
+checar("sexo, identidade, raça/cor, deficiência, cotas, promoção e área de atuação por descrição",
+       identical(tp$Sexo, c("Masculino", "Feminino", "Não Declarado pelo Respondente")) &&
+           identical(tp$`Identidade de gênero`, c("Cisgênero", "Não Declarado pelo Respondente", "")) &&
+           identical(tp$`Raça / Cor`, c("Branco(a)", "Negro(a)-Pardo(a)", "99")) &&
+           identical(tp$`Deficiência`, c("Não possui", "Física/motora; Visual", NA)) &&
+           identical(tp$`Foi aprovado(a) em Regime de Cotas`, c("Não", "Cota Étnico-Racial", "Não informado")) &&
+           identical(tp$`Forma de promoção Desembargador(a)/Juiz(a) Titular`[1], "Juiz (a) Titular por Antiguidade") &&
+           identical(tp$`Área de atuação`, c("Área Judiciária do 1º Grau", "TI", "Não se aplica")))
+checar("coluna de alerta (\"Alerta: Sexo\") não é tocada", identical(tp$`Alerta: Sexo`, pessoas_ref$`Alerta: Sexo`))
+checar("Magistrados e Pessoal usam as descrições nas tabelas",
+       traduzir_codigos_magistrados(pessoas_ref)$Sexo[1] == "Masculino" &&
+           traduzir_codigos_tabela(pessoas_ref)$`Área de atuação`[2] == "TI")
+
+# Regras de magistrados com a numeração oficial.
+mag2 <- function(cpf, cargo, sit) {
+    df <- data.frame(cpf, "M", "100", sit, cargo, "01/01/2020", stringsAsFactors = FALSE)
+    names(df) <- c("CPF", "Nome", "Órgão de lotação do magistrado(a)", CAB_SIT, "Cargo", CAB_INICIO)
+    df
+}
+r_cargo <- verificar_inconsistencias_magistrados(rbind(mag2("1", "3", "1"), mag2("2", "4", "1")))
+checar("Cargo 3 (substituto de 2º grau) como Presidente é apontado; Desembargador(a) (cargo 4) não",
+       identical(unique(r_cargo$CPF[r_cargo$`Verificação` == VERIFICACAO_MAG_CARGO]), "1"))
+
+# Arquivo ENVIADO tem prioridade sobre o padrão.
+dir.create(PASTA_REFERENCIAS_ENVIADAS, recursive = TRUE, showWarnings = FALSE)
+writeLines(c("id;descricao;", "1;Juízo Único (enviado);", "2;Cível;"), file.path(PASTA_REFERENCIAS_ENVIADAS, "competencias.csv"))
+carregar_tabelas_referencia(con)
+checar("CSV enviado passa a valer", unname(REF_COMPETENCIAS["1"]) == "Juízo Único (enviado)" &&
+           dbGetQuery(con, "SELECT local FROM tab_carga_referencia WHERE tabela = 'tab_competencia'")$local == "enviado")
+invisible(file.remove(file.path(PASTA_REFERENCIAS_ENVIADAS, "competencias.csv")))
+carregar_tabelas_referencia(con)
+checar("sem o enviado, volta o padrão", unname(REF_COMPETENCIAS["1"]) == "Juízo Único" && n_tab("tab_competencia") == 39)
+
+# Módulo: consulta para todos, Gerenciar Arquivos só para admin.
+testServer(mod_tabelas_auxiliares_server,
+           args = list(con = con, ativo = reactive(TRUE), pode_gerenciar = reactive(FALSE)), {
+    session$setInputs(tabela = "tab_cargo_magistrado")
+    checar("tela lista as 16 tabelas", nrow(resumo()) == 16)
+    checar("tela mostra o conteúdo da tabela escolhida",
+           nrow(exibicao()) == 11 && all(c("Código", "Descrição") %in% names(exibicao())))
+    checar("usuário comum não vê o botão Gerenciar Arquivos", is.null(output$botao_gerenciar$html) ||
+               !grepl("gerenciar_arquivos", as.character(output$botao_gerenciar$html), fixed = TRUE))
+    session$setInputs(gerenciar_arquivos = 1)
+    checar("usuário comum não abre o Gerenciar Arquivos (servidor confere)", contador_upload() == 0)
+})
+
+testServer(mod_tabelas_auxiliares_server,
+           args = list(con = con, ativo = reactive(TRUE), pode_gerenciar = reactive(TRUE)), {
+    session$setInputs(tabela = "tab_municipio")
+    checar("municípios com UF e código IBGE", all(c("UF", "Código IBGE") %in% names(exibicao())))
+    checar("admin vê o botão Gerenciar Arquivos", grepl("gerenciar_arquivos", as.character(output$botao_gerenciar$html), fixed = TRUE))
+    session$setInputs(gerenciar_arquivos = 1)
+    checar("admin abre o Gerenciar Arquivos", contador_upload() == 1)
+    novo <- tempfile(fileext = ".csv")
+    writeLines(c("UF;seq_municipio;nome;cod_ibge;", "SE;366;AREIA BRANCA (ENVIADO);2800506;"), novo)
+    session$setInputs(upload_referencias_1 = data.frame(name = "../../municipios novos.csv", size = 1, type = "text/csv",
+                                                        datapath = novo, stringsAsFactors = FALSE))
+    session$setInputs(enviar_arquivos = 1)
+    checar("envio grava com o nome padrão e recarrega a tabela",
+           file.exists(file.path(PASTA_REFERENCIAS_ENVIADAS, "municipios.csv")) &&
+               unname(REF_MUNICIPIOS["366"]) == "AREIA BRANCA (ENVIADO)" && n_tab("tab_municipio") == 1)
+    session$setInputs(apagar_municipios = 1)
+    session$setInputs(confirmar_apagar = 1)
+    checar("apagar o enviado volta ao padrão",
+           !file.exists(file.path(PASTA_REFERENCIAS_ENVIADAS, "municipios.csv")) && n_tab("tab_municipio") == 75)
+})
+
+limpar_auditoria()
+invisible(dbExecute(con, "UPDATE usuarios_totp SET ultimo_contador = NULL"))
+testServer(server, {
+    session$setInputs(entrar_totp = 0)
+    session$setInputs(usuario_totp = "maria", codigo_totp = totp_gerar(chave("maria")), entrar_totp = 1)
+    h <- as.character(output$tela_principal$html)
+    sub_cfg <- regmatches(h, regexpr('class="icon-submenu".*?id="sair"', h))
+    checar("Configurações tem Tabelas Auxiliares (dentro do grupo, depois de Ver instruções)",
+           length(sub_cfg) == 1 && pos_em(sub_cfg, 'id="ir_tabelas_auxiliares"') > pos_em(sub_cfg, 'id="mostrar_readme"'))
+    session$setInputs(ir_tabelas_auxiliares = 1)
+    checar("clicar em Tabelas Auxiliares abre a tela", identical(menuSelecionado(), ABA_TABELAS_AUXILIARES))
 })
 
 # =====================================================
