@@ -1112,6 +1112,99 @@ checar("app tem o handler que bloqueia os filtros",
        grepl("'bloquear-filtros'", codigo_app, fixed = TRUE) && grepl("selectize.disable()", codigo_app, fixed = TRUE))
 
 # =====================================================
+cat("\n[12] Magistrados e Serventias: abas Base, Envio, Alertas e Inconsistências; janela sem arquivo\n")
+# =====================================================
+
+pos_abas <- function(h, valores) vapply(valores, function(v) regexpr(sprintf('data-value="%s"', v), h, fixed = TRUE)[1], numeric(1))
+
+for (mod in list(
+    list(nome = "Magistrados", ui = mod_alertas_magistrados_ui, server = mod_alertas_magistrados_server,
+         pasta = pasta_magistrados, id = "mag"),
+    list(nome = "Serventias", ui = mod_alertas_serventias_ui, server = mod_alertas_serventias_server,
+         pasta = pasta_serventias, id = "srv")
+)) {
+
+    h <- paste(as.character(mod$ui(mod$id)), collapse = "")
+    pa <- pos_abas(h, c("base", "envio", "alertas", "inconsistencias"))
+    checar(sprintf("%s: abas Base de Dados, Envio, Alertas e Inconsistências, nessa ordem", mod$nome),
+           all(pa > 0) && !is.unsorted(pa))
+    checar(sprintf("%s: blocos de filtros com id (alvo do bloqueio)", mod$nome),
+           all(vapply(paste0(mod$id, "-", c("base_filtros", "envio_filtros", "alertas_filtros",
+                                             "base_grafico_controles", "envio_grafico_controles")),
+                      function(x) grepl(sprintf('id="%s"', x), h, fixed = TRUE), logical(1))))
+
+    unlink(file.path(dir_teste, "data", "MPRO"), recursive = TRUE)
+    testServer(mod$server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+        session$setInputs(secao = "base")
+        checar(sprintf("%s: Base sem arquivo abre a janela de aviso", mod$nome), identical(alerta_sem_arquivo_aberto(), "base"))
+        session$setInputs(secao = "envio")
+        checar(sprintf("%s: Envio sem arquivo abre a janela de aviso", mod$nome), identical(alerta_sem_arquivo_aberto(), "envio"))
+        session$setInputs(secao = "alertas")
+        checar(sprintf("%s: Alertas sem arquivo abre a janela de aviso", mod$nome), identical(alerta_sem_arquivo_aberto(), "alertas"))
+        session$setInputs(secao = "inconsistencias")
+        checar(sprintf("%s: Inconsistências não abre a janela", mod$nome), identical(alerta_sem_arquivo_aberto(), "alertas"))
+        checar(sprintf("%s: filtros de Base, Envio e Alertas bloqueados", mod$nome), all(filtros_bloqueados()))
+        checar(sprintf("%s: tabelas ficam vazias, sem mensagem (aviso vai para a janela)", mod$nome),
+               identical(erro_saida(output$base_tabela), "") && identical(erro_saida(output$envio_tabela), "") &&
+                   identical(erro_saida(output$tabela), ""))
+        n_up <- contador_upload()
+        session$setInputs(sem_arquivo_gerenciar = 1)
+        checar(sprintf("%s: botão da janela abre o Gerenciar Arquivos", mod$nome), contador_upload() == n_up + 1)
+    })
+
+    ativo_teste <- reactiveVal(FALSE)
+    testServer(mod$server, args = list(empresa = reactive("MPRO"), ativo = ativo_teste), {
+        session$setInputs(secao = "envio")
+        checar(sprintf("%s: módulo fechado não abre a janela", mod$nome), is.null(alerta_sem_arquivo_aberto()))
+        ativo_teste(TRUE)
+        session$flushReact()
+        checar(sprintf("%s: abrir o módulo numa aba sem arquivo abre a janela", mod$nome),
+               identical(alerta_sem_arquivo_aberto(), "envio"))
+    })
+}
+
+# Arquivo de envio: identificação no upload, leitura e filtros.
+mag_envio <- data.frame(
+    CPF = c("11122233344", "55566677788"), Nome = c("ANA JUIZA", "BRUNO JUIZ"),
+    `Órgão de lotação do magistrado(a)` = c("1", "2"), Cargo = c("1", "2"),
+    `Situação profissional atual` = c("7", "7"), Status = c("Ativo", "Inativo"),
+    check.names = FALSE
+)
+checar("Magistrados: arquivo com \"envio\" no nome é identificado como envio",
+       identical(identificar_tipo_arquivo_magistrados(mag_envio, "Magistrados envio.xlsx"), "envio") &&
+           identical(identificar_tipo_arquivo_magistrados(mag_envio, "magistrados.xlsx"), "base"))
+srv_envio <- data.frame(`Código Serventia` = c("10", "20"), `Nome Serventia` = c("VARA A", "VARA B"),
+                        CEP = c("49000000", "49000001"), Status = c("Ativo", "Ativo"), check.names = FALSE)
+checar("Serventias: arquivo com \"envio\" no nome é identificado como envio",
+       identical(identificar_tipo_arquivo_serventias(srv_envio, "serventias_envio.csv"), "envio") &&
+           identical(identificar_tipo_arquivo_serventias(srv_envio, "serventias.csv"), "base"))
+
+dir.create(pasta_magistrados("MPRO"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv2(mag_envio, file.path(pasta_magistrados("MPRO"), "magistrados_envio.csv"))
+dir.create(pasta_serventias("MPRO"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv2(srv_envio, file.path(pasta_serventias("MPRO"), "serventias_envio.csv"))
+
+testServer(mod_alertas_magistrados_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "envio", envio_status = "Todos", envio_cargo = "Todos", envio_situacao = "Todos",
+                      envio_orgao = "Todos", envio_cpf = "", envio_nome = "", envio_detalhe = "")
+    checar("Magistrados: Envio com arquivo não abre a janela", is.null(alerta_sem_arquivo_aberto()))
+    checar("Magistrados: Envio carrega o arquivo de envio", nrow(dados_envio()) == 2 && nrow(dados_base()) == 0)
+    checar("Magistrados: só os filtros do Envio ficam liberados",
+           filtros_bloqueados()[["base"]] && !filtros_bloqueados()[["envio"]])
+    session$setInputs(envio_status = "Ativo")
+    checar("Magistrados: filtro do Envio funciona", nrow(dados_envio_filtrados()) == 1)
+    checar("Magistrados: Envio traduz o código do cargo", any(grepl("Titular", envio_exibicao()$Cargo)))
+})
+
+testServer(mod_alertas_serventias_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "envio", envio_status = "Todos", envio_unidade = "Todos",
+                      envio_entrancia = "Todos", envio_codigo = "", envio_detalhe = "")
+    checar("Serventias: Envio com arquivo não abre a janela", is.null(alerta_sem_arquivo_aberto()))
+    checar("Serventias: Envio carrega o arquivo de envio", nrow(dados_envio()) == 2 && nrow(dados_base()) == 0)
+    checar("Serventias: tabela do Envio é exibida", identical(erro_saida(output$envio_tabela), NA_character_))
+})
+
+# =====================================================
 
 cat(sprintf("\n%d de %d verificações passaram.\n", total - falhas, total))
 if (falhas > 0) quit(status = 1)
