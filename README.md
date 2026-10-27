@@ -117,9 +117,9 @@ FarolJus/
 │   ├── auth.R             # login AD (LDAP via Python)
 │   ├── auth_totp.R        # login TOTP, cadastro e auditoria
 │   ├── database.R         # conexão com o IRIS (JDBC)
-│   ├── tabelas_auxiliares.R  # códigos do MPM no SQLite (Cargo/Situação)
-│   └── tabelas_referencia.R  # municípios, competências, tipo/classificação de unidade
-├── referencias/           # tabelas de referência do MPM (CSV, versionadas)
+│   └── tabelas_referencia.R  # tabelas auxiliares do MPM no SQLite (carga e tradução de códigos)
+├── referencias/           # arquivos padrão das tabelas auxiliares (versionados)
+│   ├── tabelas_auxiliares_mpm.xlsx
 │   ├── municipios.csv
 │   ├── competencias.csv
 │   └── tipos_classificacao_unidade.csv
@@ -128,6 +128,7 @@ FarolJus/
 │   ├── mod_magistrados.R       # Magistrados (base, envio, alertas, inconsistências)
 │   ├── mod_serventias.R        # Serventias (base, envio, alertas, inconsistências)
 │   ├── mod_inconsistencias.R   # aba de inconsistências (comum aos módulos)
+│   ├── mod_tabelas_auxiliares.R # Configurações → Tabelas Auxiliares (consulta e Gerenciar Arquivos)
 │   ├── mod_painel.R       # Painel (indicadores de Magistrados e Servidores)
 │   ├── mod_matricula.R    # matrícula por nome (consulta ao IRIS)
 │   └── mod_totp_admin.R   # janela Administração
@@ -135,6 +136,7 @@ FarolJus/
 │   └── test_seguranca.R   # testes de segurança e desempenho
 ├── data/
 │   ├── faroljus.db        # banco SQLite (criado automaticamente; não versionado)
+│   ├── referencias/       # tabelas auxiliares enviadas pelo app (não versionadas)
 │   └── <EMPRESA>/         # não versionados
 │       ├── pessoal_auxiliar/   # base (pessoal_auxiliar.xlsx/.csv) e envio
 │       ├── alertas_csv/        # alertas de Pessoal e Auxiliar do MPM
@@ -174,13 +176,22 @@ Há um modelo em `.Renviron.example`. O `.Renviron` contém senhas: não o inclu
 
 Na primeira execução desta versão, se existir a pasta antiga `<EMPRESA>/pessoal/`, o app **copia** a base (`quadro_pessoal_auxiliar.*`) para `pessoal_auxiliar/pessoal_auxiliar.*` e os demais arquivos para `alertas_csv/`, e renomeia a pasta antiga para `pessoal_migrado_<data>`. Nada é apagado.
 
-### 🗂️ Códigos do MPM (Cargo e Situação profissional)
+### 🗂️ Tabelas auxiliares do MPM (nomes no lugar de códigos)
 
-As nomenclaturas ficam nas tabelas `tab_situacao_profissional_servidor`, `tab_cargo_servidor`, `tab_situacao_profissional_magistrado` e `tab_cargo_magistrado` do `faroljus.db`, criadas automaticamente. Um ajuste feito no banco vale a partir da próxima inicialização do app.
+Na inicialização, o app grava no `faroljus.db` 16 tabelas auxiliares (`codigo`, `descricao` e, quando houver, colunas extras):
 
-### 🏷️ Nomes no lugar de códigos (tabelas de referência)
+| Origem | Tabelas |
+|---|---|
+| `tabelas_auxiliares_mpm.xlsx` (uma aba por tabela) | cargo, situação profissional e forma de promoção de magistrado; cargo e situação profissional de servidor; área de atuação; sexo; identidade de gênero; raça/cor; deficiência; regime de cotas; tipo de unidade; entrância |
+| `municipios.csv`, `competencias.csv`, `tipos_classificacao_unidade.csv` | município, competência, classificação de unidade (o CSV específico tem prioridade sobre a aba equivalente da planilha) |
 
-Na inicialização, o app cria no `faroljus.db` as tabelas `tab_municipio`, `tab_competencia`, `tab_tipo_unidade` e `tab_classificacao_unidade`, preenchidas a partir dos CSVs da pasta `referencias/` (sem sobrescrever ajustes feitos no banco). Com elas, o módulo Serventias mostra — nas tabelas, gráficos, busca Detalhe, inconsistências e no CSV gerado da tabela — **Municípios Abrangidos** (366 → AREIA BRANCA), **Competências** (1 → Juízo Único), **Tipo** e **Classificação da Unidade Judiciária** (109 → PA - Postos Avançados) e S/N como Sim/Não. O **Gerar Novo Envio** continua saindo com os códigos, como nos arquivos do MPM. Para atualizar uma tabela, edite o CSV (registros novos entram na próxima inicialização) ou o próprio banco.
+Com elas, Magistrados, Pessoal e Auxiliar, Serventias, Painel e Inconsistências mostram descrições (ex.: cargo 4 → Desembargador(a), situação 12 → Aposentado(a), município 366 → AREIA BRANCA). Códigos desconhecidos são mantidos como estão. O **Gerar Novo Envio** continua saindo com os códigos, como nos arquivos do MPM. A tabela de entrância é só de consulta: ela descreve a estrutura do tribunal e não corresponde à coluna Entrância das serventias.
+
+Cada tabela só é recarregada quando o arquivo de origem muda (controle por MD5 em `tab_carga_referencia`); ajustes feitos diretamente no banco são preservados até lá.
+
+**Configurações → Tabelas Auxiliares** mostra o conteúdo de cada tabela, onde ela é usada, o arquivo de origem e a data da carga, além de um resumo de todas e a exportação em CSV. Para administradores, **Gerenciar Arquivos** permite enviar a planilha do MPM e/ou os CSVs (o tipo é identificado pelo conteúdo), substituir ou apagar o arquivo enviado. Os arquivos enviados ficam em `<PASTA_ALERTAS>/referencias/`, valem para todas as empresas e têm prioridade sobre os padrões de `referencias/`; ao apagar, volta a valer o padrão. As tabelas são recarregadas na hora.
+
+> Os códigos de magistrados foram alinhados às tabelas oficiais do MPM: situação 10 = Licenças ou Concessões e 12 = Aposentado(a); cargo 3 = Juiz(a) Substituto(a) de 2º grau e 4 = Desembargador(a). As regras de inconsistências, Painel e Novo Envio usam esses códigos.
 
 ### 🔒 Dados que não vão para o Git
 

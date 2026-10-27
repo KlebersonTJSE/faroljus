@@ -154,14 +154,13 @@ source(here::here("modules", "mod_serventias.R"))
 source(here::here("modules", "mod_magistrados.R"))
 source(here::here("modules", "mod_painel.R"))
 
-# Tabelas de códigos do MPM no SQLite (editáveis no banco) — ver
-# R/tabelas_auxiliares.R. Depois dos módulos, que definem os padrões.
-source(here::here("R", "tabelas_auxiliares.R"))
-
-# Tabelas de referência (municípios, competências, tipo e classificação
-# de unidade judiciária) — nomes no lugar de códigos. Ver
-# R/tabelas_referencia.R e a pasta referencias/.
+# Tabelas auxiliares do MPM (cargos, situações, sexo, raça, deficiência,
+# cotas, competências, municípios, tipo/classificação de unidade...) no
+# SQLite, com descrições no lugar de códigos nas telas — ver
+# R/tabelas_referencia.R, a pasta referencias/ e o módulo Tabelas
+# Auxiliares (Configurações). Depois dos módulos, que definem os padrões.
 source(here::here("R", "tabelas_referencia.R"))
+source(here::here("modules", "mod_tabelas_auxiliares.R"))
 
 # =========================================================================
 # MÓDULOS (valores internos do navset "menu")
@@ -185,6 +184,10 @@ MENU_ROTULOS <- setNames(c("Magistrados", "Pessoal e Auxiliar", "Serventias"), M
 # logo acima de Configurações, como no FarolJus Lite.
 ABA_PAINEL <- "Painel"
 
+# Tabelas Auxiliares (Configurações): consulta das tabelas do MPM
+# gravadas no SQLite; Gerenciar Arquivos só para administradores.
+ABA_TABELAS_AUXILIARES <- "TabelasAuxiliares"
+
 ABA_INICIAL <- MENU_MODULOS[1]
 
 # =========================================================================
@@ -196,10 +199,9 @@ ABA_INICIAL <- MENU_MODULOS[1]
 # =========================================================================
 garantir_schema_totp(con)
 
-# Tabelas auxiliares (códigos do MPM): criadas e semeadas UMA vez por
-# processo, numa transação, e lidas para as constantes usadas pelos
-# módulos — ver R/tabelas_auxiliares.R.
-carregar_tabelas_auxiliares(con)
+# Tabelas auxiliares do MPM: (re)carregadas no SQLite quando o arquivo
+# de origem muda e lidas para os vetores usados pelos módulos — ver
+# R/tabelas_referencia.R.
 carregar_tabelas_referencia(con)
 
 # =========================================================================
@@ -2355,6 +2357,10 @@ server <- function(input, output, session) {
         selecionar_menu(ABA_PAINEL)
     }, ignoreInit = TRUE)
     
+    observeEvent(input$ir_tabelas_auxiliares, {
+        selecionar_menu(ABA_TABELAS_AUXILIARES)
+    }, ignoreInit = TRUE)
+    
     observeEvent(
         
         input$menu,
@@ -2701,6 +2707,23 @@ server <- function(input, output, session) {
                             title = "Ver instruções (README)"
                         ),
                         
+                        # Tela das tabelas auxiliares do MPM (SQLite) —
+                        # consulta para todos; Gerenciar Arquivos só para
+                        # administradores (ver mod_tabelas_auxiliares.R).
+                        actionLink(
+                            "ir_tabelas_auxiliares",
+                            tagList(
+                                icon("table-list"),
+                                tags$span(class = "icon-label", "Tabelas Auxiliares")
+                            ),
+                            class = paste(
+                                "icon-btn",
+                                if (identical(isolate(menuSelecionado()), ABA_TABELAS_AUXILIARES)) "ativo"
+                            ),
+                            title = "Tabelas Auxiliares",
+                            `data-menu` = ABA_TABELAS_AUXILIARES
+                        ),
+                        
                         if (ehAdmin()) {
                             actionLink(
                                 "abrir_admin",
@@ -2829,6 +2852,10 @@ server <- function(input, output, session) {
                     nav_panel_hidden(
                         value = ABA_PAINEL,
                         mod_painel_ui("painel")
+                    ),
+                    nav_panel_hidden(
+                        value = ABA_TABELAS_AUXILIARES,
+                        mod_tabelas_auxiliares_ui("tabelas_auxiliares")
                     )
                 )
                 
@@ -2849,7 +2876,7 @@ server <- function(input, output, session) {
     
     # Os módulos não recebem mais `con`: os códigos do MPM vêm das
     # constantes carregadas do SQLite na inicialização (ver
-    # R/tabelas_auxiliares.R).
+    # R/tabelas_referencia.R).
     #
     # `ativo` e `empresa` exigem sessão AUTENTICADA: os módulos são
     # iniciados para toda sessão (inclusive na tela de login), e é a
@@ -2884,6 +2911,15 @@ server <- function(input, output, session) {
     
     # Painel: lê as bases só quando é aberto (e quando algum arquivo
     # mudou), com o mesmo cache de leitura dos módulos.
+    # Tabelas Auxiliares: consulta para quem está logado; Gerenciar
+    # Arquivos (troca as tabelas de todas as empresas) só para admin.
+    mod_tabelas_auxiliares_server(
+        "tabelas_auxiliares",
+        con = con,
+        ativo = modulo_ativo(ABA_TABELAS_AUXILIARES),
+        pode_gerenciar = reactive(ehAdmin())
+    )
+    
     mod_painel_server(
         "painel",
         ativo = modulo_ativo(ABA_PAINEL),

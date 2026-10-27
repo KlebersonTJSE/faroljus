@@ -278,39 +278,51 @@ identificar_tipo_arquivo_magistrados <- function(df, nome_arquivo = NULL) {
 # CÓDIGO -> NOMENCLATURA (Situação profissional atual e Cargo)
 # -----------------------------------------------------
 # Vetores próprios dos magistrados (a codificação é diferente da do
-# Quadro de Pessoal), conforme as Tabelas Auxiliares do MPM/CNJ
-# (seq_cargo/dsc_cargo e Situação profissional atual do Quadro de
-# Magistrados). Para ajustar uma nomenclatura, edite o vetor aqui mesmo.
+# Quadro de Pessoal), iguais às abas "Sit. prof. atual magistrado" e
+# "Cargos magistrados" da planilha Tabelas Auxiliares do MPM. São o
+# PADRÃO: na inicialização, o conteúdo das tabelas do SQLite os substitui
+# (ver R/tabelas_referencia.R e Configurações > Tabelas Auxiliares).
+#
+# Atenção: as versões anteriores deste arquivo tinham outra numeração
+# (ex.: 10 = Aposentadoria, cargo 3 = Desembargador(a)), que NÃO é a do
+# MPM — no MPM, 10 = Licenças ou Concessões, 12 = Aposentado(a), cargo 3
+# = Juiz(a) Substituto(a) de 2º grau e cargo 4 = Desembargador(a).
 # =====================================================
 
 SITUACAO_PROFISSIONAL_MAGISTRADO <- c(
-    "1"  = "Presidente",
-    "2"  = "Vice-Presidente",
-    "3"  = "Corregedor",
-    "4"  = "Ouvidor",
-    "5"  = "Diretor de Escola da Magistratura",
+    "1"  = "Presidente do Tribunal",
+    "2"  = "Vice Presidente do Tribunal",
+    "3"  = "Diretor(a) de Escola de Magistratura",
+    "4"  = "Ouvidor(a)",
+    "5"  = "Corregedor(a)",
     "6"  = "Juiz(a) convocado(a) para substituição de Desembargador(a) ou Ministro(a)",
-    "7"  = "Juiz(a) Auxiliar ou Juiz(a) Instrutor(a) que atua em Tribunal/Conselho",
+    "7"  = "Juiz(a) Auxiliar ou Juiz(a) Instrutor(a) ou Desembargador(a) que atua na alta administração de Tribunal/Conselho",
     "8"  = "Ocupante de cargo próprio na Jurisdição",
-    "9"  = "Afastado(a)",
-    "10" = "Aposentadoria",
-    "11" = "Ingresso por Remoção",
-    "12" = "Saída por Remoção",
-    "13" = "Falecimento",
-    "14" = "Exoneração/Vacância",
-    "15" = "Diretor de Foro",
-    "16" = "Convocado(a) para atuação em auxílio",
-    "17" = "Outra situação",
+    "9"  = "Afastado(a) por decisão administrativa",
+    "10" = "Licenças ou Concessões previstas em lei",
+    "11" = "Ingresso por Remoção externa",
+    "12" = "Aposentado(a)",
+    "13" = "Falecido(a)",
+    "14" = "Exonerado(a)",
+    "15" = "Demitido(a)",
+    "16" = "Diretor(a) de foro",
+    "17" = "Saída por Remoção Externa",
     "18" = "Ocupante de cargo em acumulação na Jurisdição",
-    "19" = "Ingresso",
-    "20" = "Saída"
+    "19" = "Magistrado(a) convocado para atuar em outro Tribunal ou Conselho"
 )
 
 CARGO_MAGISTRADO <- c(
-    "1" = "Juiz(a) Titular",
-    "2" = "Juiz(a) Substituto(a)",
-    "3" = "Desembargador(a)",
-    "4" = "Juiz(a) substituto(a) de 2º grau"
+    "1"  = "Juiz(a) Titular",
+    "2"  = "Juiz(a) Substituto(a)",
+    "3"  = "Juiz(a) Substituto(a) de 2º grau",
+    "4"  = "Desembargador(a)",
+    "5"  = "Ministro(a) ou Conselheiro(a)",
+    "6"  = "Magistrado(a) que atua no 1º grau eleitoral",
+    "7"  = "Magistrado(a) que atua como titular no 2º grau eleitoral ou no TSE",
+    "8"  = "Magistrado(a) que atua como substituto no 2º grau eleitoral ou no TSE",
+    "9"  = "Juiz(a) da classe advogado que atua como titular no TRE ou TSE",
+    "10" = "Juiz(a) da classe advogado que atua como substituto no TRE ou TSE",
+    "11" = "Juiz(a) Auxiliar que atua no 1º grau"
 )
 
 # Troca código por nomenclatura nas colunas Situação profissional atual
@@ -330,6 +342,13 @@ traduzir_codigos_magistrados <- function(df) {
     
     if (!is.null(col_cargo)) {
         df[[col_cargo]] <- codigo_para_nomenclatura(df[[col_cargo]], CARGO_MAGISTRADO)
+    }
+    
+    # Demais códigos de cadastro (sexo, raça/cor, deficiência, cotas,
+    # forma de promoção...) pelas tabelas auxiliares do MPM no SQLite —
+    # ver traduzir_descricoes_mpm(), em R/tabelas_referencia.R.
+    if (exists("traduzir_descricoes_mpm", mode = "function")) {
+        df <- traduzir_descricoes_mpm(df)
     }
     
     df
@@ -373,35 +392,37 @@ consolidar_alertas_magistrados_tabela <- function(df) {
 # tradução) e apontam padrões que contrariam as Tabelas Auxiliares do
 # MPM. São indícios para conferência, não correções automáticas.
 #
-#   1) CARGO 4 COM PERFIL DE DESEMBARGADOR
-#      Cargo 4 = "Juiz(a) substituto(a) de 2º grau". Um CPF com cargo 4
-#      é apontado quando, em algum registro com cargo 4:
-#        - exerce situação privativa de desembargador (1 Presidente,
-#          2 Vice-Presidente, 3 Corregedor, 4 Ouvidor, 5 Diretor de
-#          Escola da Magistratura); e/ou
+#   1) CARGO 3 COM PERFIL DE DESEMBARGADOR
+#      Cargo 3 = "Juiz(a) Substituto(a) de 2º grau". Um CPF com cargo 3
+#      é apontado quando, em algum registro com cargo 3:
+#        - exerce situação privativa de desembargador (1 Presidente do
+#          Tribunal, 2 Vice Presidente, 3 Diretor(a) de Escola de
+#          Magistratura, 4 Ouvidor(a), 5 Corregedor(a)); e/ou
 #        - está lotado em gabinete de desembargador (nome da serventia
 #          "G-<nº> DES./DESA. ...", lido da base de Serventias da
 #          empresa, se ela tiver sido enviada).
 #      Gravidade Alta com as duas evidências; Média com uma.
 #
-#   2) APOSENTADORIA (SITUAÇÃO 10) COM PERFIL DE AFASTAMENTO
+#   2) APOSENTADORIA (SITUAÇÃO 12) COM PERFIL DE AFASTAMENTO
 #      Aposentadoria é situação definitiva: não deveria ter data de
 #      saída nem ser seguida de nova situação do mesmo magistrado. Um
-#      registro com situação 10 é apontado quando:
+#      registro com situação 12 é apontado quando:
 #        - tem data de saída; e/ou
 #        - o mesmo CPF tem registro posterior em outra situação (retorno).
 #      Gravidade Alta se houve retorno ou se durou até
 #      LIMITE_DIAS_APOSENTADORIA_CURTA dias (perfil de férias/licença,
-#      que deveria ir como 9 - Afastado(a)); Média nos demais casos.
+#      que deveria ir como 10 - Licenças ou Concessões previstas em lei,
+#      ou 9 - Afastado(a) por decisão administrativa); Média nos demais
+#      casos.
 # =====================================================
 
-CARGO_MAG_DESEMBARGADOR <- "3"
-CARGO_MAG_SUBSTITUTO_2GRAU <- "4"
+CARGO_MAG_DESEMBARGADOR <- "4"
+CARGO_MAG_SUBSTITUTO_2GRAU <- "3"
 SITUACOES_MAG_DIRECAO <- c("1", "2", "3", "4", "5")
-SITUACAO_MAG_APOSENTADORIA <- "10"
+SITUACAO_MAG_APOSENTADORIA <- "12"
 LIMITE_DIAS_APOSENTADORIA_CURTA <- 60
 
-VERIFICACAO_MAG_CARGO <- "Cargo 4 com perfil de Desembargador(a)"
+VERIFICACAO_MAG_CARGO <- "Cargo 3 com perfil de Desembargador(a)"
 VERIFICACAO_MAG_APOSENTADORIA <- "Aposentadoria com perfil de afastamento"
 
 REGEX_COL_INICIO_SITUACAO_MAG <- "^data de inicio da situacao"
@@ -527,7 +548,7 @@ verificar_inconsistencias_magistrados <- function(base, nomes_orgaos = character
         )
     }
     
-    # ---- 1) Cargo 4 com perfil de Desembargador ----
+    # ---- 1) Cargo 3 com perfil de Desembargador ----
     
     rotulo_sit <- SITUACAO_PROFISSIONAL_MAGISTRADO
     
@@ -547,11 +568,11 @@ verificar_inconsistencias_magistrados <- function(base, nomes_orgaos = character
         mutate(
             Gravidade = ifelse(direcao != "" & gabinetes != "", "Alta", "Média"),
             Motivo = paste0(
-                "Cadastrado(a) como Juiz(a) substituto(a) de 2º grau (cargo 4), mas ",
+                "Cadastrado(a) como Juiz(a) Substituto(a) de 2º grau (cargo 3), mas ",
                 ifelse(direcao != "", paste0("exerce ", direcao, " (situação privativa de desembargador)"), ""),
                 ifelse(direcao != "" & gabinetes != "", " e ", ""),
                 ifelse(gabinetes != "", paste0("está lotado(a) em gabinete de desembargador (", gabinetes, ")"), ""),
-                ". Provável Desembargador(a) - cargo 3."
+                ". Provável Desembargador(a) - cargo 4."
             )
         )
     
@@ -598,7 +619,7 @@ verificar_inconsistencias_magistrados <- function(base, nomes_orgaos = character
         mutate(
             Gravidade = ifelse(voltou | curta, "Alta", "Média"),
             Motivo = paste0(
-                "Aposentadoria (situação 10) é definitiva, mas ",
+                "Aposentadoria (situação 12) é definitiva, mas ",
                 ifelse(
                     tem_saida,
                     paste0(
@@ -616,7 +637,7 @@ verificar_inconsistencias_magistrados <- function(base, nomes_orgaos = character
                     ),
                     ""
                 ),
-                ifelse(voltou | curta, ". Perfil de afastamento temporário - provável situação 9 (Afastado(a)).", ".")
+                ifelse(voltou | curta, ". Perfil de afastamento temporário - provável situação 10 (Licenças ou Concessões previstas em lei) ou 9 (Afastado(a) por decisão administrativa).", ".")
             )
         ) %>%
         arrange(Nome, inicio)
@@ -631,13 +652,14 @@ verificar_inconsistencias_magistrados <- function(base, nomes_orgaos = character
 # =====================================================
 # LOTAÇÕES ATUAIS (usadas pelo módulo Serventias)
 # -----------------------------------------------------
-# Último registro de cada CPF, em situação não encerrada (aposentadoria,
-# saída por remoção, falecimento, exoneração/vacância, saída). Alimenta a
+# Último registro de cada CPF, em situação não encerrada (12
+# Aposentado(a), 13 Falecido(a), 14 Exonerado(a), 15 Demitido(a), 17
+# Saída por Remoção Externa — numeração do MPM). Alimenta a
 # verificação "Serventia inativa com lotação ativa" de
 # mod_serventias.R.
 # =====================================================
 
-SITUACOES_MAG_ENCERRADAS <- c("10", "12", "13", "14", "20")
+SITUACOES_MAG_ENCERRADAS <- c("12", "13", "14", "15", "17")
 
 carregar_lotacoes_magistrados_empresa <- function(empresa) {
     tryCatch(
@@ -2567,18 +2589,18 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
             "inc",
             dados = reactive(traduzir_codigos_magistrados(inconsistencias())),
             verificacoes = reactive({
-                sem_cargo3 <- !any(
+                sem_desembargador <- !any(
                     mag_codigo(valores_coluna_regex(dados_base(), REGEX_COL_CARGO)) == CARGO_MAG_DESEMBARGADOR,
                     na.rm = TRUE
                 )
                 lista <- list(
                     tagList(
-                        "Cargo 4 (Juiz(a) substituto(a) de 2º grau) exercendo Presidência, Vice, ",
+                        "Cargo 3 (Juiz(a) Substituto(a) de 2º grau) exercendo Presidência, Vice, ",
                         "Corregedoria, Ouvidoria ou Direção da Escola, ou lotado em gabinete de desembargador.",
-                        if (sem_cargo3) tags$b(" Nenhum registro da base usa o cargo 3 (Desembargador(a)).")
+                        if (sem_desembargador) tags$b(" Nenhum registro da base usa o cargo 4 (Desembargador(a)).")
                     ),
                     sprintf(
-                        "Aposentadoria (situação 10) com data de saída ou seguida de nova situação. Alta: houve retorno ou durou até %d dias.",
+                        "Aposentadoria (situação 12) com data de saída ou seguida de nova situação. Alta: houve retorno ou durou até %d dias.",
                         LIMITE_DIAS_APOSENTADORIA_CURTA
                     )
                 )

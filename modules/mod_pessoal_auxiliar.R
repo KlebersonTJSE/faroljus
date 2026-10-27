@@ -714,22 +714,24 @@ grafico_barras_girafe <- function(resumo, titulo, subtitulo = NULL) {
 # No arquivo do Quadro de Pessoal e Auxiliar (servidores) do CNJ/MPM,
 # as colunas "Situação Profissional Atual" e "Cargo" vêm como código
 # numérico. A correspondência código -> nomenclatura fica nos vetores
-# abaixo (Manual de Preenchimento do MPM — Quadro de Pessoal e
-# Auxiliar), sem banco de dados: para ajustar uma nomenclatura, edite o
-# vetor aqui mesmo.
+# abaixo, iguais às abas "Sit. prof. atual servidor" e "Cargos
+# servidores" da planilha Tabelas Auxiliares do MPM. São o PADRÃO: na
+# inicialização, o conteúdo das tabelas do SQLite os substitui (ver
+# R/tabelas_referencia.R e Configurações > Tabelas Auxiliares).
 #
 # É só para exibição: a tabela e o CSV gerado a partir dela mostram a
 # nomenclatura, enquanto dados(), dados_filtrados() e as verificações
 # de inconsistência continuam com os códigos originais.
 #
-# Obs.: na Situação Profissional Atual não existem os códigos 4 e 5
-# (a numeração pula de 3 para 6) — é assim no manual.
+# Obs.: na Situação Profissional Atual não existe o código 5 (a
+# numeração pula de 4 para 6) — é assim na tabela do MPM.
 # =====================================================
 
 SITUACAO_PROFISSIONAL_SERVIDOR <- c(
-  "1"  = "Cargo de chefia",
+  "1"  = "Cargo de Chefia",
   "2"  = "Outros cargos em comissão ou funções comissionadas",
   "3"  = "Não exerce cargo em comissão ou função comissionada",
+  "4"  = "Cargo de Assessoramento",
   "6"  = "Afastado(a)",
   "7"  = "Aposentado(a)",
   "8"  = "Falecido(a)",
@@ -744,7 +746,7 @@ CARGO_SERVIDOR <- c(
   "1"  = "Servidor(a) efetivo(a) ou removido(a) para o Tribunal",
   "2"  = "Servidor(a) cedido(a) ou requisitado(a) de outro tribunal",
   "3"  = "Servidor(a) cedido(a) ou requisitado(a) de órgãos de fora do judiciário",
-  "4"  = "Servidor(a) Comissionado(a) Sem vínculo",
+  "4"  = "Servidor(a) comissionado(a) sem vínculo",
   "5"  = "Estagiário(a)",
   "6"  = "Terceirizado(a)",
   "7"  = "Servidor(a) de serventia privatizada",
@@ -753,7 +755,8 @@ CARGO_SERVIDOR <- c(
   "10" = "Aprendiz",
   "11" = "Voluntário(a)",
   "12" = "Residência Jurídica",
-  "13" = "Outros"
+  "13" = "Outros",
+  "14" = "Servidor(a) cedido(a) ou requisitado(a) para Realização de Pleitos Eleitorais"
 )
 
 # Troca, em um vetor de valores, o código pela nomenclatura da tabela
@@ -794,6 +797,13 @@ traduzir_codigos_tabela <- function(df) {
 
   for (i in which(str_detect(nomes_norm, REGEX_COL_CARGO))) {
     df[[i]] <- codigo_para_nomenclatura(df[[i]], CARGO_SERVIDOR)
+  }
+
+  # Demais códigos de cadastro (sexo, raça/cor, deficiência, cotas,
+  # área de atuação...) pelas tabelas auxiliares do MPM no SQLite — ver
+  # traduzir_descricoes_mpm(), em R/tabelas_referencia.R.
+  if (exists("traduzir_descricoes_mpm", mode = "function")) {
+    df <- traduzir_descricoes_mpm(df)
   }
 
   df
@@ -985,7 +995,8 @@ inconsistencias_pessoas_vazio <- function() {
 #   2) CARGO INCOMPATÍVEL COM A SITUAÇÃO
 #        - Alta: estagiário(a), terceirizado(a), juiz(a) leigo(a),
 #          conciliador(a), aprendiz, voluntário(a) ou residente (cargos 5,
-#          6, 8-12) em cargo de chefia/comissão (situação 1 ou 2) ou
+#          6, 8-12) em cargo de chefia/comissão/assessoramento (situação
+#          1, 2 ou 4) ou
 #          aposentado(a) (7); comissionado(a) sem vínculo (cargo 4) que
 #          "não exerce cargo em comissão" (situação 3);
 #        - Média: cedido(a)/requisitado(a) (2, 3) ou comissionado(a) sem
@@ -1006,12 +1017,14 @@ inconsistencias_pessoas_vazio <- function() {
 
 SITUACOES_SERV_DEFINITIVAS <- c("7", "8", "9", "10")
 SITUACOES_SERV_ENCERRADAS <- c("7", "8", "9", "10", "11", "12")
-SITUACOES_SERV_COMISSAO <- c("1", "2")
+# 4 = Cargo de Assessoramento (tabela do MPM): também é cargo em comissão.
+SITUACOES_SERV_COMISSAO <- c("1", "2", "4")
 SITUACAO_SERV_SEM_COMISSAO <- "3"
 SITUACAO_SERV_APOSENTADO <- "7"
 SITUACAO_SERV_FALECIDO <- "8"
 CARGOS_SERV_SEM_VINCULO_EFETIVO <- c("5", "6", "8", "9", "10", "11", "12")
-CARGOS_SERV_CEDIDOS <- c("2", "3")
+# 14 = cedido(a)/requisitado(a) para pleitos eleitorais (tabela do MPM).
+CARGOS_SERV_CEDIDOS <- c("2", "3", "14")
 CARGO_SERV_COMISSIONADO <- "4"
 LIMITE_DIAS_SITUACAO_CURTA <- 60
 
@@ -1312,7 +1325,7 @@ verificar_inconsistencias_servidores <- function(df, serventias = NULL, hoje = S
         case_when(
           sem_vinculo_comissao ~ "Esse tipo de vínculo não ocupa cargo de chefia, cargo em comissão nem função comissionada.",
           sem_vinculo_aposentado ~ "Esse tipo de vínculo não se aposenta pelo Tribunal - o esperado seria 9 (Exoneração/Vacância) ou 13 (Vigência de Contrato/Vínculo).",
-          comissionado_sem_comissao ~ "Comissionado(a) sem vínculo ocupa, por definição, cargo em comissão - provável situação 1 ou 2.",
+          comissionado_sem_comissao ~ "Comissionado(a) sem vínculo ocupa, por definição, cargo em comissão - provável situação 1, 2 ou 4.",
           TRUE ~ "A aposentadoria ocorre no órgão de origem/RGPS - o esperado seria 9 (Exoneração/Vacância) ou 12 (Saída por cessão/requisição)."
         )
       )
@@ -1543,16 +1556,16 @@ identificar_tipo_arquivo_pessoal <- function(df, nome_arquivo = NULL) {
 # serial saem em dd/mm/aaaa, o formato do MPM.
 #
 # Só entram os CPFs cujo registro da base tem Situação profissional
-# atual 1, 2 ou 3 (Cargo de chefia; Outros cargos em comissão ou funções
-# comissionadas; Não exerce cargo em comissão ou função comissionada —
-# SITUACOES_NOVO_ENVIO): as situações em exercício, que o novo envio
+# atual 1, 2, 3 ou 4 (Cargo de chefia; Outros cargos em comissão ou funções
+# comissionadas; Não exerce cargo em comissão ou função comissionada;
+# Cargo de Assessoramento — SITUACOES_NOVO_ENVIO): as situações em exercício, que o novo envio
 # encerra. Os demais CPFs não geram linhas.
 #
 # Devolve list(dados, cpfs_conflito, sem_envio, sem_base,
 # fora_situacao).
 # =====================================================
 
-SITUACOES_NOVO_ENVIO <- c("1", "2", "3")
+SITUACOES_NOVO_ENVIO <- c("1", "2", "3", "4")
 
 REGEX_CONFLITO_DUPLICIDADE_TRIBUNAL <- "^conflito.*duplicidade.*proprio tribunal"
 
@@ -1723,7 +1736,7 @@ gerar_novo_envio_duplicidade <- function(envio, base, alertas) {
 
     i_base <- i_base[order(inicio_base[i_base], i_base)][length(i_base)]
 
-    # Só situações 1, 2 ou 3 na base (ver SITUACOES_NOVO_ENVIO).
+    # Só situações 1, 2, 3 ou 4 na base (ver SITUACOES_NOVO_ENVIO).
     situacao_base <- if (is.null(col_situacao_base)) NA_character_ else codigo_limpo(base[[col_situacao_base]][i_base])
     if (is.na(situacao_base) || !(situacao_base %in% SITUACOES_NOVO_ENVIO)) {
       fora_situacao <- c(fora_situacao, cpf)
@@ -2786,7 +2799,7 @@ mod_pessoal_auxiliar_server <- function(id, ativo = reactive(TRUE), empresa = re
         p(
           class = "text-muted",
           "Para cada CPF com o conflito ", tags$b("Duplicidade no próprio Tribunal"),
-          " nos arquivos de Alertas cujo registro na Base de Dados tem ", tags$b("Situação profissional atual 1, 2 ou 3"),
+          " nos arquivos de Alertas cujo registro na Base de Dados tem ", tags$b("Situação profissional atual 1, 2, 3 ou 4"),
           ", gera duas linhas, com as mesmas colunas do arquivo de envio: ",
           "o registro da Base de Dados apenas com a inclusão da ", tags$b("Data de saída da situação"),
           " igual à Data de início da situação do envio, e logo abaixo o registro do envio, sem alteração. ",
@@ -2812,7 +2825,7 @@ mod_pessoal_auxiliar_server <- function(id, ativo = reactive(TRUE), empresa = re
               },
               if (length(r$fora_situacao) > 0) {
                 div(class = "text-muted", sprintf(
-                  "%d CPF(s) fora do novo envio: na Base de Dados, a situação profissional atual não é 1, 2 ou 3.",
+                  "%d CPF(s) fora do novo envio: na Base de Dados, a situação profissional atual não é 1, 2, 3 ou 4.",
                   length(r$fora_situacao)
                 ))
               }
