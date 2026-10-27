@@ -63,7 +63,72 @@ mod_matricula_ui <- function(id) {
 # SERVER
 # =====================================================
 
-mod_matricula_server <- function(id) {
+# Quantos nomes vão em cada consulta "WHERE Nome IN (?, ?, ...)". Um
+# lote grande demais esbarra no limite de parâmetros do driver; um lote
+# pequeno demais volta a fazer muitas idas ao banco.
+MATRICULA_TAMANHO_LOTE <- 500L
+
+# Busca a matrícula de cada nome no IRIS da empresa informada.
+#
+# Antes: uma consulta POR LINHA do CSV (milhares de idas ao IRIS), com o
+# nome concatenado na SQL ("... AND Nome = '<nome>'") — injeção de SQL
+# protegida só pela troca de aspas — e conectar_banco() sem a empresa
+# (que sempre falhava). Agora: nomes distintos, consultas em lotes com
+# parâmetros (?) e UMA conexão para tudo, fechada ao final mesmo em caso
+# de erro.
+buscar_matriculas_iris <- function(distro, nomes, ao_avancar = NULL) {
+  
+  # Chave de comparação: sem espaços nas pontas e em maiúsculas — no
+  # IRIS, campos texto usam por padrão a collation SQLUPPER, então o banco
+  # casa "Maria" com "MARIA" e devolve o nome como está gravado.
+  chave <- function(x) toupper(trimws(as.character(x)))
+  
+  nomes <- trimws(as.character(nomes))
+  distintos <- unique(nomes[!is.na(nomes) & nomes != ""])
+  
+  mapa <- setNames(rep(NA_character_, length(unique(chave(distintos)))), unique(chave(distintos)))
+  
+  if (length(distintos) == 0) {
+    return(rep(NA_character_, length(nomes)))
+  }
+  
+  con_iris <- conectar_banco(distro)
+  on.exit(try(DBI::dbDisconnect(con_iris), silent = TRUE), add = TRUE)
+  
+  lotes <- split(distintos, ceiling(seq_along(distintos) / MATRICULA_TAMANHO_LOTE))
+  
+  for (i in seq_along(lotes)) {
+    
+    lote <- lotes[[i]]
+    
+    sql <- paste0(
+      "SELECT Nome, Matricula FROM RHCadServidor ",
+      "WHERE Financeiro->CalculaFolha = 1 AND Nome IN (",
+      paste(rep("?", length(lote)), collapse = ", "),
+      ")"
+    )
+    
+    res <- do.call(DBI::dbGetQuery, c(list(con_iris, sql), as.list(lote)))
+    
+    if (nrow(res) > 0) {
+      res <- res[!is.na(res$Matricula), , drop = FALSE]
+      # Mesmo critério de antes: a primeira matrícula encontrada.
+      res <- res[!duplicated(chave(res$Nome)), , drop = FALSE]
+      encontrados <- chave(res$Nome) %in% names(mapa)
+      mapa[chave(res$Nome)[encontrados]] <- as.character(res$Matricula[encontrados])
+    }
+    
+    if (is.function(ao_avancar)) {
+      ao_avancar(i, length(lotes))
+    }
+    
+  }
+  
+  unname(mapa[chave(nomes)])
+  
+}
+
+mod_matricula_server <- function(id, empresa = reactive(NULL)) {
   moduleServer(
     id,
     function(input, output, session) {
@@ -76,8 +141,18 @@ mod_matricula_server <- function(id) {
       observeEvent(input$processar, {
         req(input$arquivo_csv)
         
+        distro <- empresa()
+        
+        if (is.null(distro) || is.na(distro) || trimws(distro) == "") {
+          showNotification(
+            "Nenhuma empresa definida para esta sessão. Faça login novamente.",
+            type = "error"
+          )
+          return()
+        }
+        
         tryCatch({
-          # 1. Ler arquivo CSV uploaded
+          # 1. Ler arquivo CSV enviado
           dados <- read.csv(
             input$arquivo_csv$datapath,
             stringsAsFactors = FALSE,
@@ -102,40 +177,15 @@ mod_matricula_server <- function(id) {
             return()
           }
           
-          # Conectar ao banco IRIS Intersystems usando a função padrão da aplicação
-          con <- conectar_banco()
-          on.exit(dbDisconnect(con), add = TRUE)
-          
-          # 2. Inicializa a nova coluna Matricula
-          dados$Matricula <- NA_character_
-          
-          # 3. Iteração para buscar a matrícula de cada registro
-          withProgress(message = 'Consultando banco de dados...', value = 0, {
-            n <- nrow(dados)
-            
-            for (i in seq_len(n)) {
-              nome_servidor <- dados$Nome[i]
-              
-              if (!is.na(nome_servidor) && trimws(nome_servidor) != "") {
-                # Tratamento de aspas simples para prevenção de erro SQL
-                nome_escapado <- gsub("'", "''", nome_servidor)
-                
-                # Query exigida para o IRIS Intersystems
-                query <- paste0(
-                  "SELECT Matricula FROM RHCadServidor WHERE Financeiro->CalculaFolha = 1 AND Nome = '",
-                  nome_escapado,
-                  "'"
-                )
-                
-                res <- dbGetQuery(con, query)
-                
-                if (nrow(res) > 0 && !is.na(res$Matricula[1])) {
-                  dados$Matricula[i] <- as.character(res$Matricula[1])
-                }
+          # 2. Consulta ao IRIS (lotes parametrizados, uma conexão)
+          withProgress(message = "Consultando banco de dados...", value = 0, {
+            dados$Matricula <- buscar_matriculas_iris(
+              distro,
+              dados$Nome,
+              ao_avancar = function(i, n) {
+                setProgress(i / n, detail = paste("Lote", i, "de", n))
               }
-              
-              incProgress(1 / n, detail = paste("Processando registro", i, "de", n))
-            }
+            )
           })
           
           dados_processados(dados)
@@ -147,8 +197,11 @@ mod_matricula_server <- function(id) {
           
         }, error = function(e) {
           dados_processados(NULL)
+          # Detalhe técnico (URL/usuário do IRIS, mensagem do driver) só no
+          # log do servidor.
+          warning("Erro ao consultar matrículas no IRIS: ", conditionMessage(e))
           showNotification(
-            paste("Erro ao processar:", e$message),
+            "Erro ao processar o arquivo ou consultar o banco. Verifique o arquivo e tente novamente.",
             type = "error",
             duration = NULL
           )

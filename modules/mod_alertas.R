@@ -208,7 +208,9 @@ carregar_alertas <- function(caminho, arquivos = listar_arquivos_alertas_pessoal
         return(data.frame())
     }
     
-    resultados <- map(arquivos, function(arquivo) {
+    # Cada arquivo é lido uma vez por processo e reaproveitado enquanto
+    # não mudar (com_cache_arquivo(), em R/utils.R).
+    resultados <- map(arquivos, function(arquivo) com_cache_arquivo(arquivo, "alertas_pessoal", function() {
         
         df <- ler_arquivo_dados(arquivo)
         
@@ -231,7 +233,7 @@ carregar_alertas <- function(caminho, arquivos = listar_arquivos_alertas_pessoal
         }
         
         df
-    })
+    }))
     
     resultados <- Filter(Negate(is.null), resultados)
     
@@ -347,39 +349,70 @@ SEMENTE_CARGO_SERVIDOR <- c(
 # que ainda não existirem. Idempotente: pode rodar a cada início da
 # aplicação/sessão. Um banco novo/vazio (ex.: primeiro deploy no
 # shinyapps.io) ganha as tabelas já preenchidas.
-garantir_tabelas_auxiliares <- function(con) {
+# Controle de "já semeado neste processo" e cache das tabelas auxiliares
+# (ver ler_tabela_auxiliar(), abaixo). Compartilhado entre as sessões.
+.tabelas_auxiliares <- new.env(parent = emptyenv())
+
+# Por quanto tempo (segundos) uma tabela auxiliar lida do SQLite é
+# reaproveitada antes de ser lida de novo. As tabelas quase nunca mudam;
+# o prazo curto só garante que um ajuste feito direto no banco apareça
+# sem reiniciar o app.
+TTL_TABELAS_AUXILIARES <- 300
+
+# Semeia as tabelas dentro de UMA transação (no SQLite, cada INSERT fora
+# de transação é um commit com gravação em disco) e só uma vez por
+# processo — antes rodava a cada sessão aberta.
+semear_tabelas_auxiliares <- function(con, sementes) {
     
-    criar_e_semear <- function(tabela, semente) {
+    chave <- paste0("semeado:", paste(names(sementes), collapse = ","))
+    
+    if (isTRUE(.tabelas_auxiliares[[chave]])) {
+        return(invisible(TRUE))
+    }
+    
+    DBI::dbWithTransaction(con, {
         
-        DBI::dbExecute(
-            con,
-            sprintf(
-                paste0(
-                    "CREATE TABLE IF NOT EXISTS %s (",
-                    "codigo INTEGER PRIMARY KEY, ",
-                    "nomenclatura TEXT NOT NULL)"
-                ),
-                tabela
+        for (tabela in names(sementes)) {
+            
+            semente <- sementes[[tabela]]
+            
+            DBI::dbExecute(
+                con,
+                sprintf(
+                    paste0(
+                        "CREATE TABLE IF NOT EXISTS %s (",
+                        "codigo INTEGER PRIMARY KEY, ",
+                        "nomenclatura TEXT NOT NULL)"
+                    ),
+                    tabela
+                )
             )
-        )
-        
-        for (i in seq_along(semente)) {
+            
             DBI::dbExecute(
                 con,
                 sprintf(
                     "INSERT OR IGNORE INTO %s (codigo, nomenclatura) VALUES (?, ?)",
                     tabela
                 ),
-                params = list(as.integer(names(semente)[i]), unname(semente[i]))
+                params = list(as.integer(names(semente)), unname(semente))
             )
+            
         }
         
-    }
+    })
     
-    criar_e_semear(TAB_SITUACAO_PROFISSIONAL, SEMENTE_SITUACAO_PROFISSIONAL_SERVIDOR)
-    criar_e_semear(TAB_CARGO, SEMENTE_CARGO_SERVIDOR)
+    assign(chave, TRUE, envir = .tabelas_auxiliares)
     
     invisible(TRUE)
+    
+}
+
+garantir_tabelas_auxiliares <- function(con) {
+    
+    sementes <- list(SEMENTE_SITUACAO_PROFISSIONAL_SERVIDOR, SEMENTE_CARGO_SERVIDOR)
+    names(sementes) <- c(TAB_SITUACAO_PROFISSIONAL, TAB_CARGO)
+    
+    semear_tabelas_auxiliares(con, sementes)
     
 }
 
@@ -394,6 +427,16 @@ ler_tabela_auxiliar <- function(con, tabela) {
         return(character(0))
     }
     
+    # Cache por processo (TTL_TABELAS_AUXILIARES): antes, cada filtro,
+    # combo e renderização da tabela fazia uma consulta nova ao SQLite.
+    chave <- paste0("tabela:", tabela)
+    item <- .tabelas_auxiliares[[chave]]
+    
+    if (!is.null(item) &&
+        as.numeric(difftime(Sys.time(), item$lido_em, units = "secs")) < TTL_TABELAS_AUXILIARES) {
+        return(item$valor)
+    }
+    
     tryCatch({
         
         ref <- DBI::dbGetQuery(
@@ -401,7 +444,11 @@ ler_tabela_auxiliar <- function(con, tabela) {
             sprintf("SELECT codigo, nomenclatura FROM %s", tabela)
         )
         
-        setNames(as.character(ref$nomenclatura), as.character(ref$codigo))
+        valor <- setNames(as.character(ref$nomenclatura), as.character(ref$codigo))
+        
+        assign(chave, list(valor = valor, lido_em = Sys.time()), envir = .tabelas_auxiliares)
+        
+        valor
         
     }, error = function(e) {
         
@@ -555,22 +602,29 @@ consolidar_colunas_por_linha <- function(df, colunas) {
         return(rep(NA_character_, nrow(df)))
     }
     
-    matriz <- as.matrix(df[colunas])
+    # Vetorizado por COLUNA (poucas dezenas) em vez de apply() por LINHA
+    # (milhares): mesmo resultado, bem mais rápido em arquivos grandes.
+    sufixos <- str_trim(str_remove(colunas, "^[^:]*:"))
     
-    apply(matriz, 1, function(linha) {
+    resultado <- rep(NA_character_, nrow(df))
+    
+    for (j in seq_along(colunas)) {
         
-        preenchidos <- !is.na(linha) & str_trim(linha) != ""
+        valores <- str_trim(as.character(df[[colunas[j]]]))
+        preenchido <- !is.na(valores) & valores != ""
         
-        if (!any(preenchidos)) {
-            return(NA_character_)
+        if (!any(preenchido)) {
+            next
         }
         
-        sufixos <- str_trim(str_remove(colunas[preenchidos], "^[^:]*:"))
-        valores <- str_trim(linha[preenchidos])
+        trecho <- paste0(sufixos[j], ": ", valores[preenchido])
+        atual <- resultado[preenchido]
         
-        paste0(sufixos, ": ", valores, collapse = " | ")
+        resultado[preenchido] <- ifelse(is.na(atual), trecho, paste0(atual, " | ", trecho))
         
-    })
+    }
+    
+    resultado
     
 }
 
@@ -1018,9 +1072,14 @@ arquivos_pessoal <- function(pasta) {
         
         tipos <- vapply(
             arquivos,
-            function(f) identificar_tipo_arquivo_pessoal(
-                suppressWarnings(ler_arquivo_dados(f, n_max = 5))
-            ),
+            # Só o cabeçalho, e guardado em cache por arquivo: esta
+            # função é chamada várias vezes por sessão (carga, Gerenciar
+            # Arquivos, Apagar, Enviar).
+            function(f) com_cache_arquivo(f, "tipo_pessoal", function() {
+                identificar_tipo_arquivo_pessoal(
+                    suppressWarnings(ler_arquivo_dados(f, n_max = 5))
+                )
+            }),
             character(1),
             USE.NAMES = FALSE
         )
@@ -1055,9 +1114,13 @@ carregar_base_pessoal <- function(arquivo) {
         return(data.frame())
     }
     
-    limpar_dados_lidos(
-        ler_arquivo_dados(arquivo, aba_preferida = "Quadro pessoal e auxiliar")
-    )
+    # Lido e limpo uma vez por processo; reaproveitado por todas as
+    # sessões enquanto o arquivo não mudar (com_cache_arquivo()).
+    com_cache_arquivo(arquivo, "base_pessoal", function() {
+        limpar_dados_lidos(
+            ler_arquivo_dados(arquivo, aba_preferida = "Quadro pessoal e auxiliar")
+        )
+    })
     
 }
 
@@ -1555,9 +1618,32 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
         # CARREGA DADOS DA EMPRESA ATUAL (login / troca de empresa)
         # ----------------------------------------
         
-        observeEvent(empresa(), {
-            req(empresa())
-            recarregar()
+        # Carga SOB DEMANDA: só quando o módulo é aberto pela primeira vez
+        # para a empresa da sessão (ou quando a empresa muda com ele
+        # aberto). Antes, os três módulos liam todos os seus arquivos logo
+        # no login — mesmo os que o usuário nem abriria —, o que deixava a
+        # entrada no sistema lenta. Com a empresa vazia (logout), os dados
+        # são descartados.
+        empresa_carregada <- reactiveVal(NULL)
+        
+        observeEvent(list(empresa(), ativo()), {
+            
+            if (!empresa_definida()) {
+                if (!is.null(empresa_carregada())) {
+                    dados_base(data.frame())
+                    dados(data.frame())
+                    empresa_carregada(NULL)
+                }
+                return(invisible(NULL))
+            }
+            
+            req(ativo())
+            
+            if (!identical(empresa_carregada(), empresa())) {
+                recarregar()
+                empresa_carregada(empresa())
+            }
+            
         }, ignoreInit = FALSE)
         
         # =================================================
@@ -1663,7 +1749,10 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
             req(empresa())
             inicio <- Sys.time()
             
+            # "Atualizar Dados" sempre relê do disco.
+            limpar_cache_arquivos(caminho_alertas(empresa()))
             recarregar()
+            empresa_carregada(empresa())
             atualizar_todos_combos()
             
             showNotification(
@@ -2049,9 +2138,10 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
                     
                 } else {
                     
-                    # Alertas mantêm o nome original — exceto se o nome for
-                    # o reservado para a base.
-                    destino <- pendente$name[i]
+                    # Alertas mantêm o nome original (saneado — ver
+                    # nome_arquivo_seguro() em R/utils.R e o envio abaixo) —
+                    # exceto se o nome for o reservado para a base.
+                    destino <- pendente$nome_seguro[i]
                     if (eh_arquivo_base_pessoal(destino)) {
                         destino <- paste0("alertas_", destino)
                     }
@@ -2099,10 +2189,15 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
             
             extensoes <- extensao_arquivo(up$name)
             
+            # O nome original vem do navegador e pode trazer "../" (gravar
+            # na pasta de outra empresa ou fora de data/) — só o nome
+            # saneado é usado para gravar.
+            nomes_seguros <- nome_arquivo_seguro(up$name, EXTENSOES_PLANILHA)
+            
             tipos <- vapply(
                 seq_len(nrow(up)),
                 function(i) {
-                    if (!(extensoes[i] %in% EXTENSOES_PLANILHA)) {
+                    if (is.na(nomes_seguros[i]) || !(extensoes[i] %in% EXTENSOES_PLANILHA)) {
                         return(NA_character_)
                     }
                     identificar_tipo_arquivo_pessoal(
@@ -2142,6 +2237,7 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
             
             pendente <- data.frame(
                 name = up$name[validos],
+                nome_seguro = nomes_seguros[validos],
                 datapath = up$datapath[validos],
                 tipo = tipos[validos],
                 extensao = extensoes[validos],
@@ -2400,21 +2496,29 @@ mod_alertas_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NU
             "\"Gerenciar Arquivos\" para enviar os arquivos de alertas."
         )
         
+        # Espera o usuário parar de digitar (400 ms) antes de filtrar —
+        # antes, cada tecla refiltrava e redesenhava tabela e gráficos.
+        cpf_d <- debounce(reactive(input$cpf), 400)
+        nome_d <- debounce(reactive(input$nome), 400)
+        
         dados_filtrados <- reactive({
             req(dados())
             df <- dados()
             
-            if (!is.null(input$cpf) && input$cpf != "" && "CPF" %in% names(df)) {
+            cpf <- str_trim(cpf_d() %||% "")
+            nome <- str_trim(nome_d() %||% "")
+            
+            if (cpf != "" && "CPF" %in% names(df)) {
                 df <- df %>%
                     filter(str_detect(
-                        str_to_upper(as.character(CPF)),
-                        fixed(str_to_upper(str_trim(input$cpf)))
+                        str_to_upper(coalesce(as.character(CPF), "")),
+                        fixed(str_to_upper(cpf))
                     ))
             }
             
-            if (!is.null(input$nome) && input$nome != "" && "Nome" %in% names(df)) {
+            if (nome != "" && "Nome" %in% names(df)) {
                 df <- df %>%
-                    filter(str_detect(str_to_upper(Nome), fixed(str_to_upper(str_trim(input$nome)))))
+                    filter(str_detect(str_to_upper(coalesce(as.character(Nome), "")), fixed(str_to_upper(nome))))
             }
             
             if (!is.null(input$alerta) && input$alerta != "Todos" && input$alerta %in% names(df)) {

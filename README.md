@@ -103,7 +103,7 @@ Ao fechar a janela, a chave recém-gerada e os campos do formulário são limpos
 | Banco local (acessos e auditoria) | `DBI`, `RSQLite` |
 | Banco IRIS (InterSystems) | `RJDBC`, `rJava`, driver JDBC do IRIS |
 | Login AD | `reticulate` + Python com `ldap3` |
-| Login TOTP | `digest`, `jsonlite`, `qrcode` (opcional, para o QR Code) |
+| Login TOTP | `digest`, `jsonlite`, `openssl` (chave aleatória segura), `qrcode` (opcional, para o QR Code) |
 
 ---
 
@@ -118,11 +118,16 @@ FarolJus/
 │   ├── auth_totp.R        # login TOTP, cadastro e auditoria
 │   └── database.R         # conexão com o IRIS (JDBC)
 ├── modules/
-│   ├── mod_alertas.R      # Alertas (tabela, gráficos, CSV, arquivos)
+│   ├── mod_alertas.R      # Pessoal e Auxiliar (base, alertas, CSV, arquivos)
+│   ├── mod_alertas_serventias.R  # Serventias
+│   ├── mod_alertas_magistrados.R # Magistrados
+│   ├── mod_matricula.R    # matrícula por nome (consulta ao IRIS)
 │   └── mod_totp_admin.R   # janela Administração
+├── tests/
+│   └── test_seguranca.R   # testes de segurança e desempenho
 ├── data/
-│   ├── radarsocial.db     # banco SQLite (criado automaticamente)
-│   └── <EMPRESA>/alertas_csv/
+│   ├── faroljus.db        # banco SQLite (criado automaticamente; não versionado)
+│   └── <EMPRESA>/{pessoal,serventias,magistrados}/   # não versionados
 ├── img/
 ├── README.md
 ├── LICENSE
@@ -144,8 +149,18 @@ FarolJus/
 | `PASTA_ALERTAS` | Pasta raiz dos arquivos de alertas (padrão: `data`). |
 | `MAX_UPLOAD_MB` | Limite de envio de arquivos, em MB (padrão: `50`). |
 | `TOTP_EMISSOR` | Nome exibido no aplicativo Authenticator (padrão: `Farol Jus`). |
+| `ADMINS_AD` | Logins AD (separados por vírgula) com acesso à Administração e à troca de empresa. Vazio = qualquer login AD (comportamento anterior). |
+| `LOGIN_MAX_FALHAS`, `LOGIN_JANELA_MIN` | Bloqueio por tentativas: após `LOGIN_MAX_FALHAS` falhas do mesmo login em `LOGIN_JANELA_MIN` minutos, o login fica bloqueado até a janela passar (padrão: `5` e `15`). |
+| `LOGIN_MAX_FALHAS_SESSAO` | Tentativas inválidas aceitas por sessão do navegador (padrão: `10`). |
+| `FUSO_AUDITORIA` | Fuso usado para exibir a auditoria de login, gravada em UTC (padrão: `America/Maceio`). |
+| `SQLITE_WAL` | Modo WAL do SQLite (padrão: `TRUE`). Use `FALSE` se `data/` estiver em pasta de rede. |
+| `CACHE_ARQUIVOS_MAX` | Quantos arquivos lidos ficam em cache na memória, compartilhados entre as sessões (padrão: `30`; `0` desliga). |
 
-O `.Renviron` contém senhas: não o inclua no repositório nem em pacotes de publicação.
+Há um modelo em `.Renviron.example`. O `.Renviron` contém senhas: não o inclua no repositório nem em pacotes de publicação.
+
+### 🔒 Dados que não vão para o Git
+
+O banco `data/faroljus.db` (chaves TOTP e auditoria de login) e as planilhas/CSVs de `data/` (CPF, nome e dados funcionais de pessoas reais — LGPD) **não são versionados** (ver `.gitignore`). As pastas continuam existindo localmente; o banco é criado automaticamente na primeira execução.
 
 ---
 
@@ -164,7 +179,7 @@ install.packages(c(
   "shiny", "bslib", "here", "readr", "dplyr", "purrr", "stringr",
   "stringi", "DT", "echarts4r", "ggplot2", "ggiraph", "DBI",
   "RSQLite", "RJDBC", "rJava", "reticulate", "digest", "jsonlite",
-  "qrcode"
+  "openssl", "readxl", "qrcode"
 ))
 ```
 
@@ -186,6 +201,12 @@ Para testar a conexão com o IRIS de uma empresa, no console:
 
 ```r
 testar_iris("TJSE")
+```
+
+Testes de segurança e desempenho (não precisam de AD, IRIS nem do banco real):
+
+```bash
+Rscript tests/test_seguranca.R
 ```
 
 ---
