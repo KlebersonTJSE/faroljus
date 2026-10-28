@@ -235,12 +235,19 @@ AGRUPAMENTOS_BASE_MAGISTRADOS <- c(
 )
 
 # =====================================================
-# DETALHE DE UMA BARRA DO GRÁFICO (Base de Dados > Gráfico > Cargo)
+# DETALHE DE UMA BARRA DO GRÁFICO (Base de Dados > Gráfico)
 # -----------------------------------------------------
-# Ao clicar numa barra com "Agrupar por" = Cargo, abre uma janela com os
-# registros daquele cargo (já com os filtros da aba aplicados) nas
-# colunas abaixo — na ordem em que aparecem aqui. Coluna que não existir
-# no arquivo fica de fora.
+# Ao clicar numa barra, qualquer que seja o "Agrupar por", abre uma
+# janela com os registros daquele grupo (já com os filtros da aba
+# aplicados). Coluna que não existir no arquivo fica de fora.
+#
+# Colunas:
+#   - Cargo: as de COLUNAS_DETALHE_CARGO_MAGISTRADOS (com o Órgão de
+#     lotação, sem a Data de saída);
+#   - demais agrupamentos: as de COLUNAS_DETALHE_GRAFICO_MAGISTRADOS e,
+#     logo depois do Nome, a própria coluna agrupada (Órgão, Forma de
+#     promoção, Sexo, Raça / Cor, Naturalidade, Status) — com o nome
+#     que ela tem no arquivo. Situação profissional já está na lista.
 #
 # "Apenas CPFs distintos" (opção da janela): uma linha por CPF — o
 # registro com a data de início da situação mais recente, pela mesma
@@ -258,18 +265,62 @@ COLUNAS_DETALHE_CARGO_MAGISTRADOS <- c(
     "Data de Início da Situação"          = REGEX_COL_INICIO_SITUACAO
 )
 
-# `df`: dados de exibição (cargo por extenso) já filtrados; `cargo`: o
-# valor da barra clicada. Datas em dd/mm/aaaa; ordem por nome.
-detalhe_cargo_magistrados <- function(df, cargo, cpfs_distintos = FALSE) {
+COLUNAS_DETALHE_GRAFICO_MAGISTRADOS <- c(
+    "CPF"                           = REGEX_COL_CPF,
+    "Nome"                          = REGEX_COL_NOME,
+    "Cargo"                         = REGEX_COL_CARGO,
+    "Situação Profissional"         = REGEX_COL_SITUACAO,
+    "Data de Início da Situação"    = REGEX_COL_INICIO_SITUACAO,
+    "Data de Saída da Situação"     = REGEX_COL_SAIDA_SITUACAO
+)
+
+# Ícone do título da janela, por agrupamento.
+ICONES_AGRUPAMENTO_MAGISTRADOS <- c(
+    "Cargo"                        = "gavel",
+    "Situação profissional atual"  = "briefcase",
+    "Órgão de lotação"             = "building-columns",
+    "Forma de promoção"            = "arrow-up-right-dots",
+    "Sexo"                         = "venus-mars",
+    "Raça / Cor"                   = "palette",
+    "Naturalidade"                 = "location-dot",
+    "Status"                       = "circle-check"
+)
+
+# Colunas (rótulo = regex) da janela para o agrupamento `agrupar`.
+colunas_detalhe_magistrados <- function(df, agrupar) {
+
+    if (identical(agrupar, "Cargo")) {
+        return(COLUNAS_DETALHE_CARGO_MAGISTRADOS)
+    }
+
+    colunas <- COLUNAS_DETALHE_GRAFICO_MAGISTRADOS
+    regex_grupo <- AGRUPAMENTOS_BASE_MAGISTRADOS[[agrupar]]
+    col_grupo <- coluna_por_regex(df, regex_grupo)
+
+    if (is.null(regex_grupo) || is.null(col_grupo) || regex_grupo %in% colunas) {
+        return(colunas)
+    }
+
+    pos <- match("Nome", names(colunas))
+    c(colunas[seq_len(pos)], stats::setNames(regex_grupo, col_grupo), colunas[-seq_len(pos)])
+
+}
+
+# `df`: dados de exibição (códigos por extenso) já filtrados; `agrupar`:
+# a opção de "Agrupar por"; `grupo`: o valor da barra clicada. Datas em
+# dd/mm/aaaa; ordem por nome.
+detalhe_grafico_magistrados <- function(df, agrupar, grupo, cpfs_distintos = FALSE) {
+
+    regex_grupo <- AGRUPAMENTOS_BASE_MAGISTRADOS[[agrupar]]
 
     # Mesmo valor que o gráfico usa para agrupar (inclusive o rótulo de
-    # cargo vazio).
-    grupos <- valores_coluna_regex(df, REGEX_COL_CARGO)
+    # valor vazio).
+    grupos <- if (is.null(regex_grupo)) NULL else valores_coluna_regex(df, regex_grupo)
     if (is.null(grupos) || nrow(df) == 0) {
         return(data.frame())
     }
 
-    sel <- df[grupos == cargo, , drop = FALSE]
+    sel <- df[grupos == grupo, , drop = FALSE]
 
     col_cpf <- coluna_por_regex(sel, REGEX_COL_CPF)
     col_inicio <- coluna_por_regex(sel, REGEX_COL_INICIO_SITUACAO)
@@ -285,9 +336,11 @@ detalhe_cargo_magistrados <- function(df, cargo, cpfs_distintos = FALSE) {
         sel <- sel[sort(idx[ultimo]), , drop = FALSE]
     }
 
+    especificacao <- colunas_detalhe_magistrados(df, agrupar)
+
     colunas <- list()
-    for (rotulo in names(COLUNAS_DETALHE_CARGO_MAGISTRADOS)) {
-        col <- coluna_por_regex(sel, COLUNAS_DETALHE_CARGO_MAGISTRADOS[[rotulo]])
+    for (rotulo in names(especificacao)) {
+        col <- coluna_por_regex(sel, especificacao[[rotulo]])
         if (is.null(col)) next
         v <- sel[[col]]
         if (startsWith(rotulo, "Data")) {
@@ -306,6 +359,24 @@ detalhe_cargo_magistrados <- function(df, cargo, cpfs_distintos = FALSE) {
     rownames(out) <- NULL
     out
 
+}
+
+# Atalho para Agrupar por = Cargo.
+detalhe_cargo_magistrados <- function(df, cargo, cpfs_distintos = FALSE) {
+    detalhe_grafico_magistrados(df, "Cargo", cargo, cpfs_distintos)
+}
+
+# Nome do CSV gerado na janela: base-magistrados-<agrupamento>-<valor>-<data>.
+nome_csv_detalhe_magistrados <- function(prefixo, agrupar, grupo, quando = Sys.time()) {
+    limpar <- function(x) {
+        x <- normalizar_nome_coluna(x)
+        x <- gsub("[^a-z0-9]+", "-", x)
+        substr(gsub("^-+|-+$", "", x), 1, 40)
+    }
+    paste0(
+        paste(c(prefixo, limpar(agrupar), limpar(grupo)), collapse = "-"),
+        "-", format(quando, "%Y%m%d%H%M"), ".csv"
+    )
 }
 
 # =====================================================
@@ -1096,7 +1167,7 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
                                               msg_sem_dados, nome_csv,
                                               mapa_orgaos = reactive(character(0)),
                                               extra_csv = NULL,
-                                              detalhe_cargo = FALSE) {
+                                              detalhe_grafico = FALSE) {
     
     ns <- session$ns
     id <- function(x) paste0(p, "_", x)
@@ -1276,7 +1347,7 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
                 )
             )
         
-        clicavel <- clique_cargo_ativo()
+        clicavel <- clique_ativo()
         
         if (clicavel) {
             exibido$dica <- paste0(exibido$dica, "<br/><i>Clique para ver os magistrados</i>")
@@ -1293,45 +1364,63 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         )
     })
     
-    # ---- Clique numa barra (Agrupar por = Cargo): janela com os registros ----
+    # ---- Clique numa barra: janela com os registros do grupo ----
+    # Vale para todas as opções de "Agrupar por" (ver
+    # detalhe_grafico_magistrados()); só onde `detalhe_grafico` = TRUE
+    # (aba Base de Dados).
     
-    clique_cargo_ativo <- reactive({
-        isTRUE(detalhe_cargo) && identical(valor("grafico_agrupar") %||% "Cargo", "Cargo")
+    clique_ativo <- reactive({
+        isTRUE(detalhe_grafico) && (valor("grafico_agrupar") %||% "Cargo") %in% names(AGRUPAMENTOS_BASE_MAGISTRADOS)
     })
     
     detalhe_atual <- reactiveVal(NULL)
     
     observeEvent(input[[paste0(id("grafico"), "_selected")]], {
         
-        cargo <- input[[paste0(id("grafico"), "_selected")]]
+        grupo <- input[[paste0(id("grafico"), "_selected")]]
         
-        if (length(cargo) == 0 || !clique_cargo_ativo()) {
+        if (length(grupo) == 0 || !clique_ativo()) {
             return()
         }
         
-        cargo <- cargo[[1]]
+        grupo <- grupo[[1]]
+        agrupar <- valor("grafico_agrupar") %||% "Cargo"
         
         # Desmarca a barra, para que um novo clique na mesma barra volte a
         # abrir a janela.
         session$sendCustomMessage(paste0(ns(id("grafico")), "_set"), character(0))
         
-        base_cargo <- filtrados()
-        tab <- detalhe_cargo_magistrados(base_cargo, cargo)
-        detalhe_atual(list(cargo = cargo, tabela = tab, dados = base_cargo))
+        base_grupo <- filtrados()
+        tab <- detalhe_grafico_magistrados(base_grupo, agrupar, grupo)
+        detalhe_atual(list(agrupar = agrupar, grupo = grupo, tabela = tab, dados = base_grupo))
         
         n_pessoas <- if ("CPF" %in% names(tab)) {
-            length(unique(tab$CPF[!is.na(tab$CPF) & tab$CPF != ""]))
+            length(unique(chave_cpf(tab$CPF[!is.na(tab$CPF) & tab$CPF != ""])))
         } else {
             NA_integer_
         }
         
         fmt <- function(x) format(x, big.mark = ".", decimal.mark = ",")
+        icone <- ICONES_AGRUPAMENTO_MAGISTRADOS[agrupar]
+        if (is.na(icone)) icone <- "chart-column"
         
         showModal(modalDialog(
-            title = tagList(icon("gavel", class = "me-2"), cargo),
+            title = tagList(
+                icon(icone, class = "me-2"),
+                if (!identical(agrupar, "Cargo")) tags$span(class = "text-muted fw-normal", paste0(agrupar, ": ")),
+                grupo
+            ),
             size = "xl",
             easyClose = TRUE,
-            footer = modalButton("Fechar"),
+            footer = tagList(
+                downloadButton(
+                    ns(id("detalhe_download_csv")),
+                    "Gerar arquivo CSV",
+                    icon = icon("file-csv"),
+                    class = "btn btn-primary"
+                ),
+                modalButton("Fechar")
+            ),
             
             div(
                 class = "d-flex flex-wrap gap-4 mb-3",
@@ -1346,7 +1435,7 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
             ),
             
             radioButtons(
-                ns(id("detalhe_cargo_modo")), "Mostrar",
+                ns(id("detalhe_modo")), "Mostrar",
                 choices = c(
                     "Todos os registros" = "todos",
                     "Apenas CPFs distintos (situação mais recente de cada um)" = "distintos"
@@ -1355,33 +1444,68 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
                 inline = TRUE
             ),
             
-            DTOutput(ns(id("detalhe_cargo_tabela")))
+            DTOutput(ns(id("detalhe_tabela"))),
+            
+            p(
+                class = "text-muted small mt-2 mb-0",
+                "O arquivo CSV traz o que está na tabela acima: a opção \"Mostrar\" escolhida, a busca e os filtros das colunas."
+            )
         ))
         
     }, ignoreInit = TRUE)
     
     # Tabela da janela conforme a opção "Mostrar" (todos ou CPFs distintos).
-    detalhe_cargo_tabela_exibida <- reactive({
+    detalhe_tabela_exibida <- reactive({
         d <- detalhe_atual()
         req(d)
-        if (identical(valor("detalhe_cargo_modo"), "distintos")) {
-            detalhe_cargo_magistrados(d$dados, d$cargo, cpfs_distintos = TRUE)
+        if (identical(valor("detalhe_modo"), "distintos")) {
+            detalhe_grafico_magistrados(d$dados, d$agrupar, d$grupo, cpfs_distintos = TRUE)
         } else {
             d$tabela
         }
     })
     
-    output[[id("detalhe_cargo_tabela")]] <- renderDT({
+    output[[id("detalhe_tabela")]] <- renderDT({
         d <- detalhe_atual()
-        shiny::validate(need(!is.null(d) && nrow(d$tabela) > 0, "Nenhum registro para este cargo."))
+        shiny::validate(need(!is.null(d) && nrow(d$tabela) > 0, "Nenhum registro para este grupo."))
         datatable(
-            detalhe_cargo_tabela_exibida(),
+            detalhe_tabela_exibida(),
             rownames = FALSE,
             filter = "top",
             width = "100%",
             options = list(pageLength = 10, scrollX = TRUE, autoWidth = TRUE)
         )
     })
+    
+    # Linhas visíveis da tabela da janela (busca e filtros das colunas).
+    # Índice fora do tamanho atual (troca de "Mostrar" ainda não
+    # refletida no navegador) é descartado.
+    detalhe_linhas_csv <- function(tab) {
+        linhas <- valor("detalhe_tabela_rows_all")
+        if (is.null(linhas)) {
+            return(NULL)
+        }
+        linhas <- linhas[linhas >= 1 & linhas <= nrow(tab)]
+        linhas
+    }
+    
+    output[[id("detalhe_download_csv")]] <- downloadHandler(
+        
+        filename = function() {
+            d <- detalhe_atual()
+            nome_csv_detalhe_magistrados(nome_csv, d$agrupar %||% "grafico", d$grupo %||% "")
+        },
+        
+        content = function(file) {
+            inicio <- Sys.time()
+            tab <- detalhe_tabela_exibida()
+            gravar_csv_tabela(tab, file, detalhe_linhas_csv(tab))
+            showNotification(
+                sprintf("Arquivo CSV gerado em %.2fs.", tempo_decorrido(inicio)),
+                type = "message"
+            )
+        }
+    )
     
     # ---- Gerar arquivo CSV ----
     
@@ -1417,8 +1541,9 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         filtrados = filtrados,
         atualizar_combos = atualizar_combos,
         msg_sem_dados = msg_sem_dados,
-        detalhe_cargo = detalhe_atual,
-        detalhe_cargo_tabela = detalhe_cargo_tabela_exibida
+        detalhe = detalhe_atual,
+        detalhe_tabela = detalhe_tabela_exibida,
+        detalhe_linhas_csv = detalhe_linhas_csv
     )
     
 }
@@ -1817,7 +1942,7 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
             ),
             nome_csv = "base-magistrados",
             mapa_orgaos = nomes_orgaos,
-            detalhe_cargo = TRUE
+            detalhe_grafico = TRUE
         )
         
         aba_envio <- servidor_aba_cadastro_magistrados(
