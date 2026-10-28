@@ -234,6 +234,31 @@ AGRUPAMENTOS_BASE_MAGISTRADOS <- c(
     "Status"                       = REGEX_COL_STATUS_MAGISTRADO
 )
 
+# Agrupamentos mostrados em PIZZA (rosca) em vez de barras: poucas
+# categorias, em que o que interessa é a proporção do todo. Os demais
+# (Situação, Órgão, Forma de promoção, Naturalidade) continuam em barras.
+AGRUPAMENTOS_PIZZA_MAGISTRADOS <- c("Cargo", "Sexo", "Raça / Cor", "Status")
+
+# Cores fixas por categoria, para a mesma categoria ter sempre a mesma
+# cor (Sexo e Raça/Cor iguais às do Painel; Ativo verde, Inativo
+# grafite). Lidas na hora (o Painel é carregado depois deste arquivo).
+cores_fixas_magistrados <- function(agrupar) {
+    switch(
+        agrupar,
+        "Sexo" = if (exists("PAINEL_CORES_SEXO")) PAINEL_CORES_SEXO,
+        "Raça / Cor" = if (exists("PAINEL_CORES_RACA")) PAINEL_CORES_RACA,
+        "Status" = c(
+            "Ativo" = PALETA_GRAFICOS[["verde"]], "Ativa" = PALETA_GRAFICOS[["verde"]],
+            "Inativo" = PALETA_GRAFICOS[["grafite"]], "Inativa" = PALETA_GRAFICOS[["grafite"]]
+        ),
+        "Cargo" = stats::setNames(
+            PALETA_GRAFICOS[c("azul", "ciano", "laranja", "verde")],
+            CARGO_MAGISTRADO[intersect(c("1", "2", "4", "3"), names(CARGO_MAGISTRADO))][1:4]
+        ),
+        NULL
+    )
+}
+
 # =====================================================
 # DETALHE DE UMA BARRA DO GRÁFICO (Base de Dados > Gráfico)
 # -----------------------------------------------------
@@ -243,7 +268,7 @@ AGRUPAMENTOS_BASE_MAGISTRADOS <- c(
 #
 # Colunas:
 #   - Cargo: as de COLUNAS_DETALHE_CARGO_MAGISTRADOS (com o Órgão de
-#     lotação, sem a Data de saída);
+#     lotação e as datas de início e de saída da situação);
 #   - demais agrupamentos: as de COLUNAS_DETALHE_GRAFICO_MAGISTRADOS e,
 #     logo depois do Nome, a própria coluna agrupada (Órgão, Forma de
 #     promoção, Sexo, Raça / Cor, Naturalidade, Status) — com o nome
@@ -262,7 +287,8 @@ COLUNAS_DETALHE_CARGO_MAGISTRADOS <- c(
     "Órgão de lotação do magistrado(a)"   = REGEX_COL_ORGAO_MAGISTRADO,
     "Cargo"                               = REGEX_COL_CARGO,
     "Situação Profissional"               = REGEX_COL_SITUACAO,
-    "Data de Início da Situação"          = REGEX_COL_INICIO_SITUACAO
+    "Data de Início da Situação"          = REGEX_COL_INICIO_SITUACAO,
+    "Data de Saída da Situação"           = REGEX_COL_SAIDA_SITUACAO
 )
 
 COLUNAS_DETALHE_GRAFICO_MAGISTRADOS <- c(
@@ -1132,8 +1158,13 @@ ui_aba_cadastro_magistrados <- function(ns, p, titulo, icone) {
                                 width = "100%"
                             )
                         ),
-                        column(
-                            4,
+                        conditionalPanel(
+                            # "Exibir" não se aplica à pizza (ver AGRUPAMENTOS_PIZZA_MAGISTRADOS).
+                            condition = sprintf(
+                                "%s.indexOf(input['%s']) < 0",
+                                jsonlite::toJSON(AGRUPAMENTOS_PIZZA_MAGISTRADOS), id("grafico_agrupar")
+                            ),
+                            class = "col-sm-4",
                             selectInput(
                                 id("grafico_qtd"), "Exibir",
                                 choices = c(
@@ -1333,25 +1364,36 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         shiny::validate(need(is.null(r$mensagem), r$mensagem))
         
         total <- nrow(r$resumo)
-        limite <- suppressWarnings(as.integer(valor("grafico_qtd")))
+        clicavel <- clique_ativo()
         
-        exibido <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
-        
-        exibido <- exibido %>%
+        grupos <- r$resumo %>%
             mutate(
                 dica = sprintf(
-                    "<b>%s</b><br/>%s registro(s)<br/>%s magistrado(s) (CPF distintos)",
+                    "<b>%s</b><br/>%s registro(s)<br/>%s magistrado(s) (CPF distintos)%s",
                     htmltools::htmlEscape(Grupo),
                     format(Quantidade, big.mark = ".", decimal.mark = ","),
-                    format(Pessoas, big.mark = ".", decimal.mark = ",")
+                    format(Pessoas, big.mark = ".", decimal.mark = ","),
+                    if (clicavel) "<br/><i>Clique para ver os magistrados</i>" else ""
                 )
             )
         
-        clicavel <- clique_ativo()
-        
-        if (clicavel) {
-            exibido$dica <- paste0(exibido$dica, "<br/><i>Clique para ver os magistrados</i>")
+        # Pizza: todas as categorias (as menores viram "Outros"); o
+        # "Exibir" (maiores grupos) só vale para as barras.
+        if (r$agrupar %in% AGRUPAMENTOS_PIZZA_MAGISTRADOS) {
+            return(grafico_pizza_girafe(
+                grupos,
+                titulo = sprintf("Distribuição dos Registros por %s", r$agrupar),
+                subtitulo = sprintf(
+                    "%d grupo(s)%s", total,
+                    if (clicavel) " · clique numa fatia para ver os registros" else ""
+                ),
+                selecionavel = clicavel,
+                cores_fixas = cores_fixas_magistrados(r$agrupar)
+            ))
         }
+        
+        limite <- suppressWarnings(as.integer(valor("grafico_qtd")))
+        exibido <- if (!is.na(limite) && limite > 0) head(grupos, limite) else grupos
         
         grafico_barras_girafe(
             exibido,
@@ -1384,6 +1426,12 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         }
         
         grupo <- grupo[[1]]
+        
+        # Fatia "Outros" da pizza: junta vários grupos, não abre janela.
+        if (identical(grupo, ID_FATIA_OUTROS)) {
+            session$sendCustomMessage(paste0(ns(id("grafico")), "_set"), character(0))
+            return()
+        }
         agrupar <- valor("grafico_agrupar") %||% "Cargo"
         
         # Desmarca a barra, para que um novo clique na mesma barra volte a
@@ -2817,9 +2865,9 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
             shiny::validate(need(is.null(r$mensagem), r$mensagem))
             
             resumo <- r$resumo %>%
-                mutate(
-                    rotulo = str_wrap(Cargo, 45),
-                    rotulo = factor(rotulo, levels = unique(rotulo)),
+                transmute(
+                    Grupo = Cargo,
+                    Quantidade,
                     dica = sprintf(
                         "<b>%s</b><br/>%s registro(s)",
                         htmltools::htmlEscape(Cargo),
@@ -2827,22 +2875,10 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
                     )
                 )
             
-            p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
-                geom_col_interactive(aes(tooltip = dica, data_id = Cargo), fill = COR_GRAFICO) +
-                geom_text(aes(label = Quantidade), hjust = -0.2) +
-                coord_flip() +
-                scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
-                labs(title = "Quantidade de Registros por Cargo", x = "", y = "Quantidade") +
-                theme_minimal()
-            
-            girafe(
-                ggobj = p,
-                width_svg = 9,
-                height_svg = max(3, 0.45 * nrow(resumo) + 1.5),
-                options = list(
-                    opts_hover(css = CSS_HOVER_GRAFICO),
-                    opts_sizing(rescale = TRUE, width = 1)
-                )
+            grafico_pizza_girafe(
+                resumo,
+                titulo = "Distribuição dos Registros por Cargo",
+                cores_fixas = cores_fixas_magistrados("Cargo")
             )
         })
         

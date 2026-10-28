@@ -716,6 +716,153 @@ grafico_barras_girafe <- function(resumo, titulo, subtitulo = NULL, selecionavel
 }
 
 # =====================================================
+# GRÁFICO DE PIZZA (rosca, ggiraph)
+# -----------------------------------------------------
+# Para agrupamentos com poucas categorias (Cargo, Sexo, Raça/Cor,
+# Status), onde o que importa é a proporção do todo. Para ficar legível:
+#   - rosca com o total no centro;
+#   - percentual dentro da fatia (só nas fatias com 4% ou mais — nas
+#     menores o número fica na legenda e na dica);
+#   - legenda ao lado com "categoria — quantidade (percentual)", na
+#     mesma ordem das fatias (maior primeiro, no sentido horário a
+#     partir do topo);
+#   - no máximo `max_fatias` fatias: o resto vira "Outros" (não clicável);
+#   - cores da paleta (R/utils.R); `cores_fixas` (nome = categoria)
+#     para manter a mesma cor da mesma categoria em toda a aplicação
+#     (ex.: Sexo e Raça/Cor iguais às do Painel); "(Não informado)" em
+#     cinza; texto da fatia branco ou grafite, conforme o fundo.
+# `resumo` precisa de Grupo, Quantidade e dica (tooltip HTML).
+# `selecionavel = TRUE`: clicar numa fatia envia o Grupo para
+# input$<id do gráfico>_selected, como no gráfico de barras.
+# =====================================================
+
+ID_FATIA_OUTROS <- "__outros__"
+LIMITE_ROTULO_FATIA <- 4
+
+# Branco ou grafite, o que tiver mais contraste com o fundo `cor`.
+cor_texto_sobre <- function(cor) {
+  rgb_cor <- grDevices::col2rgb(cor) / 255
+  lin <- ifelse(rgb_cor <= 0.03928, rgb_cor / 12.92, ((rgb_cor + 0.055) / 1.055)^2.4)
+  lum <- 0.2126 * lin[1, ] + 0.7152 * lin[2, ] + 0.0722 * lin[3, ]
+  contraste_branco <- 1.05 / (lum + 0.05)
+  contraste_grafite <- (lum + 0.05) / (0.0612 + 0.05)
+  ifelse(contraste_branco >= contraste_grafite, "#FFFFFF", PALETA_GRAFICOS[["grafite"]])
+}
+
+# Prepara as fatias: ordem, "Outros", percentuais, cores e legenda.
+fatias_pizza <- function(resumo, cores_fixas = NULL, max_fatias = 8) {
+
+  d <- resumo %>%
+    mutate(Grupo = as.character(Grupo), id = Grupo) %>%
+    arrange(desc(Quantidade), Grupo)
+
+  if (nrow(d) > max_fatias) {
+    resto <- d[max_fatias:nrow(d), , drop = FALSE]
+    outros <- tibble(
+      Grupo = sprintf("Outros (%d)", nrow(resto)),
+      Quantidade = sum(resto$Quantidade),
+      dica = sprintf(
+        "<b>Outros</b><br/>%s registro(s) em %d grupo(s):<br/>%s",
+        format(sum(resto$Quantidade), big.mark = ".", decimal.mark = ","),
+        nrow(resto),
+        paste(htmltools::htmlEscape(head(resto$Grupo, 10)), collapse = "<br/>")
+      ),
+      id = ID_FATIA_OUTROS
+    )
+    d <- bind_rows(d[seq_len(max_fatias - 1), c("Grupo", "Quantidade", "dica", "id")], outros)
+  }
+
+  total <- sum(d$Quantidade)
+  d$pct <- if (total > 0) 100 * d$Quantidade / total else 0
+  pct_txt <- paste0(sub(".", ",", sprintf("%.1f", d$pct), fixed = TRUE), "%")
+  qtd_txt <- format(d$Quantidade, big.mark = ".", decimal.mark = ",", trim = TRUE)
+
+  # Cores: fixas, cinza para "não informado"/"Outros", e o resto da
+  # paleta na ordem, sem repetir as fixas já usadas.
+  cor <- rep(NA_character_, nrow(d))
+  if (!is.null(cores_fixas)) {
+    chave_fixa <- normalizar_nome_coluna(names(cores_fixas))
+    pos <- match(normalizar_nome_coluna(d$Grupo), chave_fixa)
+    cor[!is.na(pos)] <- unname(cores_fixas[pos[!is.na(pos)]])
+  }
+  cinza <- d$Grupo == ROTULO_VALOR_VAZIO | d$id == ID_FATIA_OUTROS
+  cor[cinza & is.na(cor)] <- COR_GRAFICO_SEM_INFO
+  livres <- setdiff(paleta_graficos(15), cor)
+  faltam <- which(is.na(cor))
+  cor[faltam] <- rep_len(livres, length(faltam))
+
+  d %>%
+    mutate(
+      cor = cor,
+      cor_texto = cor_texto_sobre(cor),
+      rotulo_fatia = ifelse(pct >= LIMITE_ROTULO_FATIA, pct_txt, ""),
+      legenda = sprintf("%s — %s (%s)", Grupo, qtd_txt, pct_txt),
+      dica = paste0(dica, "<br/>", pct_txt, " do total"),
+      legenda = factor(legenda, levels = legenda)
+    )
+
+}
+
+grafico_pizza_girafe <- function(resumo, titulo, subtitulo = NULL, selecionavel = FALSE,
+                                 cores_fixas = NULL, max_fatias = 8) {
+
+  d <- fatias_pizza(resumo, cores_fixas, max_fatias)
+  total <- sum(d$Quantidade)
+
+  # Com direction = -1 e o empilhamento na ordem da legenda, a maior
+  # fatia começa no topo e as demais seguem no sentido horário.
+  p <- ggplot(d, aes(x = 2, y = Quantidade, group = legenda)) +
+    geom_col_interactive(
+      aes(fill = legenda, tooltip = dica, data_id = id),
+      width = 1, color = "white", linewidth = 0.9
+    ) +
+    geom_text_interactive(
+      aes(label = rotulo_fatia, color = cor_texto, tooltip = dica, data_id = id),
+      position = position_stack(vjust = 0.5),
+      size = 4.2, fontface = "bold"
+    ) +
+    annotate(
+      "text", x = 0.5, y = 0,
+      label = sprintf("%s\n%s", format(total, big.mark = ".", decimal.mark = ","), if (total == 1) "registro" else "registros"),
+      size = 5.2, fontface = "bold", color = PALETA_GRAFICOS[["grafite"]], lineheight = 0.95
+    ) +
+    coord_polar(theta = "y", direction = -1) +
+    xlim(0.5, 2.5) +
+    scale_fill_manual(values = stats::setNames(d$cor, levels(d$legenda)), name = NULL) +
+    scale_color_identity() +
+    labs(title = titulo, subtitle = subtitulo) +
+    theme_void(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 14, margin = margin(b = 4)),
+      plot.subtitle = element_text(color = "#6c757d", size = 10.5, margin = margin(b = 6)),
+      legend.position = "right",
+      legend.text = element_text(size = 11.5, color = "#212529", margin = margin(l = 4)),
+      legend.key.size = grid::unit(0.95, "lines"),
+      legend.spacing.y = grid::unit(0.35, "lines"),
+      plot.margin = margin(8, 8, 8, 8)
+    ) +
+    guides(fill = guide_legend(byrow = TRUE))
+
+  girafe(
+    ggobj = p,
+    width_svg = 9,
+    height_svg = 4.6,
+    options = list(
+      opts_hover(css = "opacity:0.85;cursor:pointer;"),
+      opts_hover_inv(css = "opacity:0.45;"),
+      opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
+      opts_sizing(rescale = TRUE, width = 1),
+      if (selecionavel) {
+        opts_selection(type = "single", css = "stroke:#212529;stroke-width:2;", only_shiny = TRUE)
+      } else {
+        opts_selection(type = "none")
+      }
+    )
+  )
+
+}
+
+# =====================================================
 # CÓDIGO -> NOMENCLATURA (Situação Profissional Atual e Cargo)
 # -----------------------------------------------------
 # No arquivo do Quadro de Pessoal e Auxiliar (servidores) do CNJ/MPM,
