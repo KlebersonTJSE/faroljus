@@ -75,6 +75,10 @@ O botão **Gerenciar Arquivos** abre uma janela para enviar um ou mais arquivos 
 - **Gráfico**: quantidade de registros por tipo de alerta/conflito e por cargo;
 - **Gerar arquivo CSV**: exporta exatamente o que está na tabela, respeitando os filtros e a busca da própria tabela.
 
+Em **Magistrados → Base de Dados → Gráfico**, com **Agrupar por = Cargo**, clicar numa barra abre uma janela com o resumo (registros e magistrados distintos) e os registros daquele cargo: CPF, Nome, Cargo, Situação Profissional e datas de início e de saída da situação, respeitando os filtros da aba.
+
+Todos os gráficos usam a mesma paleta, definida em `R/utils.R` (`PALETA_GRAFICOS`): `#00B8D9`, `#005B96`, `#FF8C42`, `#4A4A4A` e `#4CAF50`. Quando há mais de cinco categorias, entram tons mais claros dessas mesmas cores.
+
 ---
 
 ## 🛡️ Administração *(somente login AD)*

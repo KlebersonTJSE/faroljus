@@ -235,6 +235,60 @@ AGRUPAMENTOS_BASE_MAGISTRADOS <- c(
 )
 
 # =====================================================
+# DETALHE DE UMA BARRA DO GRÁFICO (Base de Dados > Gráfico > Cargo)
+# -----------------------------------------------------
+# Ao clicar numa barra com "Agrupar por" = Cargo, abre uma janela com os
+# registros daquele cargo (já com os filtros da aba aplicados) nas
+# colunas abaixo — na ordem em que aparecem aqui. Coluna que não existir
+# no arquivo fica de fora.
+# =====================================================
+
+COLUNAS_DETALHE_CARGO_MAGISTRADOS <- c(
+    "CPF"                           = REGEX_COL_CPF,
+    "Nome"                          = REGEX_COL_NOME,
+    "Cargo"                         = REGEX_COL_CARGO,
+    "Situação Profissional"         = REGEX_COL_SITUACAO,
+    "Data de Início da Situação"    = REGEX_COL_INICIO_SITUACAO,
+    "Data de Saída da Situação"     = REGEX_COL_SAIDA_SITUACAO
+)
+
+# `df`: dados de exibição (cargo por extenso) já filtrados; `cargo`: o
+# valor da barra clicada. Datas em dd/mm/aaaa; ordem por nome.
+detalhe_cargo_magistrados <- function(df, cargo) {
+
+    # Mesmo valor que o gráfico usa para agrupar (inclusive o rótulo de
+    # cargo vazio).
+    grupos <- valores_coluna_regex(df, REGEX_COL_CARGO)
+    if (is.null(grupos) || nrow(df) == 0) {
+        return(data.frame())
+    }
+
+    sel <- df[grupos == cargo, , drop = FALSE]
+
+    colunas <- list()
+    for (rotulo in names(COLUNAS_DETALHE_CARGO_MAGISTRADOS)) {
+        col <- coluna_por_regex(sel, COLUNAS_DETALHE_CARGO_MAGISTRADOS[[rotulo]])
+        if (is.null(col)) next
+        v <- sel[[col]]
+        if (startsWith(rotulo, "Data")) {
+            datas <- converter_data(v)
+            v <- ifelse(is.na(datas), ifelse(is.na(v), "", as.character(v)), formatar_data(datas))
+        }
+        colunas[[rotulo]] <- v
+    }
+
+    out <- as.data.frame(colunas, check.names = FALSE, stringsAsFactors = FALSE)
+
+    if ("Nome" %in% names(out)) {
+        out <- out[order(out$Nome), , drop = FALSE]
+    }
+
+    rownames(out) <- NULL
+    out
+
+}
+
+# =====================================================
 # IDENTIFICAÇÃO DO TIPO DE ARQUIVO (upload)
 # -----------------------------------------------------
 #   - sem CPF ou sem "Órgão de lotação do magistrado(a)"       -> NA
@@ -1021,7 +1075,8 @@ ui_aba_cadastro_magistrados <- function(ns, p, titulo, icone) {
 servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
                                               msg_sem_dados, nome_csv,
                                               mapa_orgaos = reactive(character(0)),
-                                              extra_csv = NULL) {
+                                              extra_csv = NULL,
+                                              detalhe_cargo = FALSE) {
     
     ns <- session$ns
     id <- function(x) paste0(p, "_", x)
@@ -1201,10 +1256,88 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
                 )
             )
         
+        clicavel <- clique_cargo_ativo()
+        
+        if (clicavel) {
+            exibido$dica <- paste0(exibido$dica, "<br/><i>Clique para ver os magistrados</i>")
+        }
+        
         grafico_barras_girafe(
             exibido,
             titulo = sprintf("Quantidade de Registros por %s", r$agrupar),
-            subtitulo = sprintf("Exibindo %d de %d grupo(s)", nrow(exibido), total)
+            subtitulo = sprintf(
+                "Exibindo %d de %d grupo(s)%s", nrow(exibido), total,
+                if (clicavel) " · clique numa barra para ver os registros" else ""
+            ),
+            selecionavel = clicavel
+        )
+    })
+    
+    # ---- Clique numa barra (Agrupar por = Cargo): janela com os registros ----
+    
+    clique_cargo_ativo <- reactive({
+        isTRUE(detalhe_cargo) && identical(valor("grafico_agrupar") %||% "Cargo", "Cargo")
+    })
+    
+    detalhe_atual <- reactiveVal(NULL)
+    
+    observeEvent(input[[paste0(id("grafico"), "_selected")]], {
+        
+        cargo <- input[[paste0(id("grafico"), "_selected")]]
+        
+        if (length(cargo) == 0 || !clique_cargo_ativo()) {
+            return()
+        }
+        
+        cargo <- cargo[[1]]
+        
+        # Desmarca a barra, para que um novo clique na mesma barra volte a
+        # abrir a janela.
+        session$sendCustomMessage(paste0(ns(id("grafico")), "_set"), character(0))
+        
+        tab <- detalhe_cargo_magistrados(filtrados(), cargo)
+        detalhe_atual(list(cargo = cargo, tabela = tab))
+        
+        n_pessoas <- if ("CPF" %in% names(tab)) {
+            length(unique(tab$CPF[!is.na(tab$CPF) & tab$CPF != ""]))
+        } else {
+            NA_integer_
+        }
+        
+        fmt <- function(x) format(x, big.mark = ".", decimal.mark = ",")
+        
+        showModal(modalDialog(
+            title = tagList(icon("gavel", class = "me-2"), cargo),
+            size = "xl",
+            easyClose = TRUE,
+            footer = modalButton("Fechar"),
+            
+            div(
+                class = "d-flex flex-wrap gap-4 mb-3",
+                div(tags$small(class = "text-muted d-block", "Registros"), tags$strong(fmt(nrow(tab)))),
+                if (!is.na(n_pessoas)) {
+                    div(tags$small(class = "text-muted d-block", "Magistrados (CPF distintos)"), tags$strong(fmt(n_pessoas)))
+                },
+                div(
+                    tags$small(class = "text-muted d-block", "Filtros"),
+                    tags$span("os mesmos aplicados na aba")
+                )
+            ),
+            
+            DTOutput(ns(id("detalhe_cargo_tabela")))
+        ))
+        
+    }, ignoreInit = TRUE)
+    
+    output[[id("detalhe_cargo_tabela")]] <- renderDT({
+        d <- detalhe_atual()
+        shiny::validate(need(!is.null(d) && nrow(d$tabela) > 0, "Nenhum registro para este cargo."))
+        datatable(
+            d$tabela,
+            rownames = FALSE,
+            filter = "top",
+            width = "100%",
+            options = list(pageLength = 10, scrollX = TRUE, autoWidth = TRUE)
         )
     })
     
@@ -1241,7 +1374,8 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         exibicao = exibicao,
         filtrados = filtrados,
         atualizar_combos = atualizar_combos,
-        msg_sem_dados = msg_sem_dados
+        msg_sem_dados = msg_sem_dados,
+        detalhe_cargo = detalhe_atual
     )
     
 }
@@ -1639,7 +1773,8 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
                 " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo."
             ),
             nome_csv = "base-magistrados",
-            mapa_orgaos = nomes_orgaos
+            mapa_orgaos = nomes_orgaos,
+            detalhe_cargo = TRUE
         )
         
         aba_envio <- servidor_aba_cadastro_magistrados(
@@ -2500,7 +2635,7 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
                 e_bar(Quantidade, name = "Registros") %>%
                 e_flip_coords() %>%
                 e_labels(position = "right") %>%
-                e_color("#2C7FB8") %>%
+                e_color(COR_GRAFICO) %>%
                 e_title("Quantidade de Registros por Tipo de Alerta/Conflito") %>%
                 e_tooltip(trigger = "item") %>%
                 e_legend(show = FALSE) %>%
@@ -2525,7 +2660,7 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
                 )
             
             p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
-                geom_col_interactive(aes(tooltip = dica, data_id = Cargo), fill = "#2C7FB8") +
+                geom_col_interactive(aes(tooltip = dica, data_id = Cargo), fill = COR_GRAFICO) +
                 geom_text(aes(label = Quantidade), hjust = -0.2) +
                 coord_flip() +
                 scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
@@ -2537,7 +2672,7 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
                 width_svg = 9,
                 height_svg = max(3, 0.45 * nrow(resumo) + 1.5),
                 options = list(
-                    opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
+                    opts_hover(css = CSS_HOVER_GRAFICO),
                     opts_sizing(rescale = TRUE, width = 1)
                 )
             )

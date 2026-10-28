@@ -72,7 +72,7 @@ PAINEL_SERVIDORES <- "Servidores"
 PAINEL_TODOS <- "Todos"
 PAINEL_PUBLICOS <- c(PAINEL_TODOS, PAINEL_MAGISTRADOS, PAINEL_SERVIDORES)
 
-PAINEL_COR_PUBLICO <- c("Magistrados" = "#003366", "Servidores" = "#2C9AA8")
+PAINEL_COR_PUBLICO <- c("Magistrados" = PALETA_GRAFICOS[["azul"]], "Servidores" = PALETA_GRAFICOS[["ciano"]])
 
 # Nome normalizado (sem acento, minúsculo — normalizar_nome_coluna()).
 REGEX_COL_NASCIMENTO <- "^data (de )?nascimento"
@@ -172,25 +172,23 @@ PAINEL_IDADE_MIN <- 14
 PAINEL_IDADE_MAX <- 100
 
 # Paleta categórica (distingue categorias; não representa cor de pele).
-PAINEL_PALETA <- c(
-    "#2C7FB8", "#F28E2B", "#59A14F", "#B07AA1", "#E15759",
-    "#76B7B2", "#EDC948", "#9C755F", "#FF9DA7", "#4E79A7",
-    "#A0CBE8", "#8CD17D", "#D4A6C8"
-)
-PAINEL_COR_SEM_INFO <- "#ADB5BD"
+# Paleta padrão da aplicação (R/utils.R), com tons mais claros para
+# as categorias que passarem de cinco.
+PAINEL_PALETA <- paleta_graficos(15)
+PAINEL_COR_SEM_INFO <- COR_GRAFICO_SEM_INFO
 
 PAINEL_CORES_SEXO <- c(
-    "Feminino" = "#C2456E",
-    "Masculino" = "#2C7FB8",
-    "Intersexo" = "#59A14F"
+    "Feminino" = PALETA_GRAFICOS[["laranja"]],
+    "Masculino" = PALETA_GRAFICOS[["azul"]],
+    "Intersexo" = PALETA_GRAFICOS[["verde"]]
 )
 
 PAINEL_CORES_RACA <- c(
-    "Branco(a)" = "#2C7FB8",
-    "Negro(a)-Pardo(a)" = "#F28E2B",
-    "Negro(a)-Preto(a)" = "#B07AA1",
-    "Amarelo(a)" = "#EDC948",
-    "Indígena" = "#59A14F"
+    "Branco(a)" = PALETA_GRAFICOS[["azul"]],
+    "Negro(a)-Pardo(a)" = PALETA_GRAFICOS[["laranja"]],
+    "Negro(a)-Preto(a)" = PALETA_GRAFICOS[["grafite"]],
+    "Amarelo(a)" = PALETA_GRAFICOS[["ciano"]],
+    "Indígena" = PALETA_GRAFICOS[["verde"]]
 )
 
 # =====================================================
@@ -814,7 +812,7 @@ painel_piramide <- function(p) {
 
 }
 
-painel_indicador <- function(icone, valor, rotulo, detalhe = NULL, cor = "#0d6efd") {
+painel_indicador <- function(icone, valor, rotulo, detalhe = NULL, cor = COR_GRAFICO) {
     div(
         class = "pn-kpi",
         style = paste0("--pn-cor:", cor, ";"),
@@ -996,8 +994,8 @@ CSS_PAINEL <- "
 #ID .pn-pir-lado.text-start { justify-content:flex-start; }
 #ID .pn-pir-meio { text-align:center; color:#495057; font-weight:600; font-size:.75rem; }
 #ID .pn-pir-barra { height:16px; border-radius:3px; min-width:0; }
-#ID .pn-pir-f { background:#C2456E; }
-#ID .pn-pir-m { background:#2C7FB8; }
+#ID .pn-pir-f { background:#FF8C42; }
+#ID .pn-pir-m { background:#005B96; }
 #ID .pn-pir-valor { color:#6c757d; font-size:.72rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
 
 #ID .pn-numeros { display:flex; flex-wrap:wrap; gap:1.5rem; margin-top:1rem; }
@@ -1249,7 +1247,7 @@ mod_painel_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NUL
             cores_raca <- cores_painel(unique(c(r_raca$categoria, todos$raca[!is.na(todos$raca)])), PAINEL_CORES_RACA)
             cores_def <- cores_painel(
                 c(PAINEL_COM_DEFICIENCIA, PAINEL_SEM_DEFICIENCIA, PAINEL_SEM_INFO),
-                c("Com deficiência" = "#E15759", "Sem deficiência" = "#2C7FB8")
+                c("Com deficiência" = PALETA_GRAFICOS[["laranja"]], "Sem deficiência" = PALETA_GRAFICOS[["azul"]])
             )
             cores_tipos <- cores_painel(TIPOS_DEFICIENCIA_PAINEL)
             cores_cargo <- cores_painel(unique(c(r_cargo$categoria, todos$cargo[!is.na(todos$cargo)])))
@@ -1267,7 +1265,7 @@ mod_painel_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NUL
                     painel_indicador(
                         "users", fmt_int(n_total), "Pessoas no quadro atual",
                         paste(fmt_int(n_mag), "magistrados ·", fmt_int(n_srv), "servidores"),
-                        "#003366"
+                        PALETA_GRAFICOS[["azul"]]
                     ),
                     painel_indicador(
                         "venus", fmt_pct(pct_de(p$sexo == "Feminino")), "Mulheres",
@@ -1276,19 +1274,19 @@ mod_painel_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NUL
                     ),
                     painel_indicador(
                         "people-group", fmt_pct(pct_de(p$raca %in% RACA_NEGROS_PAINEL)), "Pessoas negras",
-                        "pretas e pardas", "#F28E2B"
+                        "pretas e pardas", PALETA_GRAFICOS[["grafite"]]
                     ),
                     painel_indicador(
                         "wheelchair", fmt_pct(pct_de(p$deficiencia == PAINEL_COM_DEFICIENCIA)), "Pessoas com deficiência",
                         paste(fmt_int(sum(p$deficiencia == PAINEL_COM_DEFICIENCIA, na.rm = TRUE)), "pessoas"),
-                        "#E15759"
+                        PALETA_GRAFICOS[["ciano"]]
                     ),
                     painel_indicador(
                         "cake-candles",
                         if (length(idades) > 0) paste(fmt_num(mean(idades)), "anos") else "–",
                         "Idade média",
                         if (length(idades) > 0) paste("mediana de", fmt_num(stats::median(idades), 0), "anos"),
-                        "#59A14F"
+                        PALETA_GRAFICOS[["verde"]]
                     )
                 ),
 
