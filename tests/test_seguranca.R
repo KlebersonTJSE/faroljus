@@ -1648,7 +1648,7 @@ checar("Pizza: maior fatia primeiro, legenda com quantidade e percentual sem esp
        identical(as.character(fz$legenda), c("Masculino — 361 (54,4%)", "Feminino — 300 (45,2%)", "(Não informado) — 3 (0,5%)")))
 checar("Pizza: Sexo com as cores do Painel; não informado em cinza",
        identical(fz$cor, unname(c(PAINEL_CORES_SEXO[["Masculino"]], PAINEL_CORES_SEXO[["Feminino"]], COR_GRAFICO_SEM_INFO))))
-checar("Pizza: percentual dentro só das fatias com 4% ou mais", identical(fz$rotulo_fatia, c("54,4%", "45,2%", "")))
+checar("Pizza: percentual dentro só das fatias com 5% ou mais", identical(fz$rotulo_fatia, c("54,4%", "45,2%", "")))
 checar("Pizza: texto da fatia branco no azul e grafite no laranja (contraste)",
        identical(unname(fz$cor_texto[1:2]), c("#FFFFFF", PALETA_GRAFICOS[["grafite"]])))
 fo <- fatias_pizza(tibble(Grupo = paste("G", 1:12), Quantidade = 12:1, dica = "x"))
@@ -1680,6 +1680,87 @@ cores_fixas_antigas <- c("#2C7FB8", "#F28E2B", "#59A14F", "#E15759", "#C2456E", 
 codigo_modulos <- paste(unlist(lapply(list.files(here::here("modules"), full.names = TRUE), readLines, warn = FALSE)), collapse = "\n")
 checar("Paleta: nenhuma cor antiga de gráfico sobrou nos módulos",
        !any(vapply(cores_fixas_antigas, function(cor) grepl(cor, codigo_modulos, fixed = TRUE), logical(1))))
+
+# =====================================================
+cat("\n[17] Pessoal e Auxiliar: aba Gráfico com as mesmas regras de Magistrados\n")
+# =====================================================
+
+srv_base_g <- data.frame(
+    CPF = c("1001715594", "01001715594", "22222222222", "33333333333", "44444444444"),
+    Nome = c("ANA", "ANA", "BRUNO", "CARLA", "DIEGO"),
+    `Órgão de lotação do(a) servidor(a)` = c("10", "20", "10", "30", "10"),
+    Cargo = c("1", "1", "4", "1", "5"),
+    `Situação profissional atual` = c("3", "1", "2", "3", "3"),
+    `Data de início da situação` = c("01/01/2018", "01/03/2024", "01/01/2020", "01/01/2021", "01/02/2025"),
+    `Data de saída da situação` = c("29/02/2024", "", "", "", ""),
+    `Área de atuação` = c("4", "4", "7", "2", "4"),
+    Sexo = c("F", "F", "M", "F", "M"),
+    Status = c("Inativo", "Ativo", "Ativo", "Ativo", "Ativo"),
+    check.names = FALSE
+)
+srv_exib <- traduzir_codigos_tabela(srv_base_g)
+efetivo <- CARGO_SERVIDOR[["1"]]
+
+checar("Pessoal: Cargo, Área de atuação, Sexo, Raça / Cor e Status em pizza; o resto em barras",
+       identical(AGRUPAMENTOS_PIZZA_PESSOAL, c("Cargo", "Área de atuação", "Sexo", "Raça / Cor", "Status")) &&
+           all(AGRUPAMENTOS_PIZZA_PESSOAL %in% names(AGRUPAMENTOS_BASE_PESSOAL)) &&
+           all(setdiff(AGRUPAMENTOS_PIZZA_MAGISTRADOS, "Área de atuação") %in% AGRUPAMENTOS_PIZZA_PESSOAL))
+checar("Pessoal: todas as opções de Agrupar por têm ícone na janela",
+       setequal(names(ICONES_AGRUPAMENTO_PESSOAL), names(AGRUPAMENTOS_BASE_PESSOAL)))
+dp <- detalhe_grafico_pessoal(srv_exib, "Cargo", efetivo)
+checar("Pessoal > janela de Cargo: CPF, Nome, Órgão do servidor, Cargo, Situação, Início e Saída",
+       identical(names(dp), c("CPF", "Nome", "Órgão de lotação do(a) servidor(a)", "Cargo",
+                              "Situação Profissional", "Data de Início da Situação", "Data de Saída da Situação")) &&
+           nrow(dp) == 3)
+dpd <- detalhe_grafico_pessoal(srv_exib, "Cargo", efetivo, cpfs_distintos = TRUE)
+checar("Pessoal > CPFs distintos: CPF com e sem zero é o mesmo; fica a situação mais recente",
+       nrow(dpd) == 2 && dpd$`Data de Início da Situação`[dpd$Nome == "ANA"] == "01/03/2024")
+area_valor <- valores_coluna_regex(srv_exib, REGEX_COL_AREA_ATUACAO)[1]
+da <- detalhe_grafico_pessoal(srv_exib, "Área de atuação", area_valor)
+checar("Pessoal > janela de Área de atuação: a área entra depois do Nome, por extenso",
+       nrow(da) == 3 && names(da)[3] == "Área de atuação" && !grepl("^\\d+$", da[[3]][1]) &&
+           "Data de Saída da Situação" %in% names(da))
+cp <- cores_fixas_pessoal("Cargo")
+checar("Pessoal: cores fixas do Cargo (efetivo azul) e Status/Sexo iguais às de Magistrados",
+       cp[[CARGO_SERVIDOR[["1"]]]] == PALETA_GRAFICOS[["azul"]] &&
+           identical(cores_fixas_pessoal("Status"), cores_fixas_magistrados("Status")) &&
+           identical(cores_fixas_pessoal("Sexo"), cores_fixas_magistrados("Sexo")))
+fl <- fatias_pizza(tibble(Grupo = CARGO_SERVIDOR[["3"]], Quantidade = 1, dica = "x"))
+checar("Pizza: legenda de cargo longo quebra em linhas", grepl("\n", as.character(fl$legenda)))
+ui_pa <- paste(as.character(mod_pessoal_auxiliar_ui("pessoal_auxiliar")), collapse = "")
+checar("Pessoal: o seletor \"Exibir\" some quando o gráfico é pizza",
+       grepl("[&quot;Cargo&quot;,&quot;Área de atuação&quot;,&quot;Sexo&quot;,&quot;Raça / Cor&quot;,&quot;Status&quot;].indexOf(input[&#39;pessoal_auxiliar-base_grafico_agrupar&#39;])", ui_pa, fixed = TRUE))
+
+dir.create(pasta_pessoal("MPRO"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv2(srv_base_g, file.path(pasta_pessoal("MPRO"), "pessoal_auxiliar.csv"))
+limpar_cache_arquivos()
+testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "base", base_status = "Todos", base_cargo = "Todos", base_situacao = "Todos",
+                      base_orgao = "Todos", base_cpf = "", base_nome = "", base_detalhe = "",
+                      base_grafico_agrupar = "Cargo", base_grafico_qtd = "20")
+    session$setInputs(base_grafico_selected = efetivo)
+    d <- aba_base$detalhe()
+    checar("Pessoal > Base > Gráfico: clicar na fatia de Cargo abre a janela com os registros",
+           !is.null(d) && identical(d$grupo, efetivo) && nrow(d$tabela) == 3)
+    session$setInputs(base_detalhe_modo = "distintos")
+    checar("Pessoal > janela: \"Apenas CPFs distintos\"", nrow(aba_base$detalhe_tabela()) == 2)
+    arq <- tempfile(fileext = ".csv")
+    gravar_csv_tabela(aba_base$detalhe_tabela(), arq, aba_base$detalhe_linhas_csv(aba_base$detalhe_tabela()))
+    csv <- suppressMessages(readr::read_csv2(arq, col_types = readr::cols(.default = "c"), progress = FALSE))
+    checar("Pessoal > janela > Gerar arquivo CSV: a tabela exibida", nrow(csv) == 2 && identical(names(csv), names(aba_base$detalhe_tabela())))
+    session$setInputs(base_detalhe_modo = "todos", base_status = "Ativo")
+    session$setInputs(base_grafico_selected = character(0))
+    session$setInputs(base_grafico_selected = efetivo)
+    checar("Pessoal > janela respeita os filtros da aba (Status Ativo)", nrow(aba_base$detalhe()$tabela) == 2)
+    aba_base$detalhe(NULL)
+    session$setInputs(base_grafico_selected = ID_FATIA_OUTROS)
+    checar("Pessoal > fatia \"Outros\" não abre janela", is.null(aba_base$detalhe()))
+    session$setInputs(base_status = "Todos", base_grafico_agrupar = "Órgão de lotação", base_grafico_selected = "10")
+    checar("Pessoal > Gráfico em barras (Órgão) também abre a janela", nrow(aba_base$detalhe()$tabela) == 3)
+    session$setInputs(secao = "envio", envio_grafico_agrupar = "Cargo", envio_grafico_selected = efetivo)
+    checar("Pessoal > Envio: o clique não abre a janela (só na Base de Dados)", is.null(aba_envio$detalhe()))
+})
+invisible(file.remove(file.path(pasta_pessoal("MPRO"), "pessoal_auxiliar.csv")))
 
 # =====================================================
 

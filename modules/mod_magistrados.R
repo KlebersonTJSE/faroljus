@@ -240,23 +240,17 @@ AGRUPAMENTOS_BASE_MAGISTRADOS <- c(
 AGRUPAMENTOS_PIZZA_MAGISTRADOS <- c("Cargo", "Sexo", "Raça / Cor", "Status")
 
 # Cores fixas por categoria, para a mesma categoria ter sempre a mesma
-# cor (Sexo e Raça/Cor iguais às do Painel; Ativo verde, Inativo
-# grafite). Lidas na hora (o Painel é carregado depois deste arquivo).
+# cor: Sexo, Raça/Cor e Status como em cores_fixas_comuns(); Cargo com
+# uma cor por cargo.
 cores_fixas_magistrados <- function(agrupar) {
-    switch(
-        agrupar,
-        "Sexo" = if (exists("PAINEL_CORES_SEXO")) PAINEL_CORES_SEXO,
-        "Raça / Cor" = if (exists("PAINEL_CORES_RACA")) PAINEL_CORES_RACA,
-        "Status" = c(
-            "Ativo" = PALETA_GRAFICOS[["verde"]], "Ativa" = PALETA_GRAFICOS[["verde"]],
-            "Inativo" = PALETA_GRAFICOS[["grafite"]], "Inativa" = PALETA_GRAFICOS[["grafite"]]
-        ),
-        "Cargo" = stats::setNames(
-            PALETA_GRAFICOS[c("azul", "ciano", "laranja", "verde")],
-            CARGO_MAGISTRADO[intersect(c("1", "2", "4", "3"), names(CARGO_MAGISTRADO))][1:4]
-        ),
-        NULL
-    )
+    if (identical(agrupar, "Cargo")) {
+        codigos <- intersect(c("1", "2", "4", "3"), names(CARGO_MAGISTRADO))
+        return(stats::setNames(
+            unname(PALETA_GRAFICOS[c("azul", "ciano", "laranja", "verde")][seq_along(codigos)]),
+            CARGO_MAGISTRADO[codigos]
+        ))
+    }
+    cores_fixas_comuns(agrupar)
 }
 
 # =====================================================
@@ -312,79 +306,19 @@ ICONES_AGRUPAMENTO_MAGISTRADOS <- c(
     "Status"                       = "circle-check"
 )
 
-# Colunas (rótulo = regex) da janela para o agrupamento `agrupar`.
+# Regras comuns em detalhe_grafico_registros() (mod_pessoal_auxiliar.R).
 colunas_detalhe_magistrados <- function(df, agrupar) {
-
-    if (identical(agrupar, "Cargo")) {
-        return(COLUNAS_DETALHE_CARGO_MAGISTRADOS)
-    }
-
-    colunas <- COLUNAS_DETALHE_GRAFICO_MAGISTRADOS
-    regex_grupo <- AGRUPAMENTOS_BASE_MAGISTRADOS[[agrupar]]
-    col_grupo <- coluna_por_regex(df, regex_grupo)
-
-    if (is.null(regex_grupo) || is.null(col_grupo) || regex_grupo %in% colunas) {
-        return(colunas)
-    }
-
-    pos <- match("Nome", names(colunas))
-    c(colunas[seq_len(pos)], stats::setNames(regex_grupo, col_grupo), colunas[-seq_len(pos)])
-
+    colunas_detalhe_grafico(
+        df, AGRUPAMENTOS_BASE_MAGISTRADOS, agrupar, COLUNAS_DETALHE_GRAFICO_MAGISTRADOS,
+        list("Cargo" = COLUNAS_DETALHE_CARGO_MAGISTRADOS)
+    )
 }
 
-# `df`: dados de exibição (códigos por extenso) já filtrados; `agrupar`:
-# a opção de "Agrupar por"; `grupo`: o valor da barra clicada. Datas em
-# dd/mm/aaaa; ordem por nome.
 detalhe_grafico_magistrados <- function(df, agrupar, grupo, cpfs_distintos = FALSE) {
-
-    regex_grupo <- AGRUPAMENTOS_BASE_MAGISTRADOS[[agrupar]]
-
-    # Mesmo valor que o gráfico usa para agrupar (inclusive o rótulo de
-    # valor vazio).
-    grupos <- if (is.null(regex_grupo)) NULL else valores_coluna_regex(df, regex_grupo)
-    if (is.null(grupos) || nrow(df) == 0) {
-        return(data.frame())
-    }
-
-    sel <- df[grupos == grupo, , drop = FALSE]
-
-    col_cpf <- coluna_por_regex(sel, REGEX_COL_CPF)
-    col_inicio <- coluna_por_regex(sel, REGEX_COL_INICIO_SITUACAO)
-
-    if (isTRUE(cpfs_distintos) && !is.null(col_cpf) && nrow(sel) > 0) {
-        chave <- chave_cpf(sel[[col_cpf]])
-        inicio <- if (is.null(col_inicio)) as.Date(rep(NA, nrow(sel))) else converter_data(sel[[col_inicio]])
-        ordem <- seq_len(nrow(sel))
-        # Dentro de cada CPF: sem data primeiro, depois por data e ordem
-        # no arquivo — o último de cada grupo é o que fica.
-        idx <- order(chave, !is.na(inicio), inicio, ordem, na.last = FALSE)
-        ultimo <- !duplicated(chave[idx], fromLast = TRUE) | chave[idx] == ""
-        sel <- sel[sort(idx[ultimo]), , drop = FALSE]
-    }
-
-    especificacao <- colunas_detalhe_magistrados(df, agrupar)
-
-    colunas <- list()
-    for (rotulo in names(especificacao)) {
-        col <- coluna_por_regex(sel, especificacao[[rotulo]])
-        if (is.null(col)) next
-        v <- sel[[col]]
-        if (startsWith(rotulo, "Data")) {
-            datas <- converter_data(v)
-            v <- ifelse(is.na(datas), ifelse(is.na(v), "", as.character(v)), formatar_data(datas))
-        }
-        colunas[[rotulo]] <- v
-    }
-
-    out <- as.data.frame(colunas, check.names = FALSE, stringsAsFactors = FALSE)
-
-    if ("Nome" %in% names(out)) {
-        out <- out[order(out$Nome), , drop = FALSE]
-    }
-
-    rownames(out) <- NULL
-    out
-
+    detalhe_grafico_registros(
+        df, AGRUPAMENTOS_BASE_MAGISTRADOS, agrupar, grupo, COLUNAS_DETALHE_GRAFICO_MAGISTRADOS,
+        list("Cargo" = COLUNAS_DETALHE_CARGO_MAGISTRADOS), cpfs_distintos
+    )
 }
 
 # Atalho para Agrupar por = Cargo.
@@ -392,17 +326,8 @@ detalhe_cargo_magistrados <- function(df, cargo, cpfs_distintos = FALSE) {
     detalhe_grafico_magistrados(df, "Cargo", cargo, cpfs_distintos)
 }
 
-# Nome do CSV gerado na janela: base-magistrados-<agrupamento>-<valor>-<data>.
 nome_csv_detalhe_magistrados <- function(prefixo, agrupar, grupo, quando = Sys.time()) {
-    limpar <- function(x) {
-        x <- normalizar_nome_coluna(x)
-        x <- gsub("[^a-z0-9]+", "-", x)
-        substr(gsub("^-+|-+$", "", x), 1, 40)
-    }
-    paste0(
-        paste(c(prefixo, limpar(agrupar), limpar(grupo)), collapse = "-"),
-        "-", format(quando, "%Y%m%d%H%M"), ".csv"
-    )
+    nome_csv_detalhe_grafico(prefixo, agrupar, grupo, quando)
 }
 
 # =====================================================
@@ -1146,39 +1071,7 @@ ui_aba_cadastro_magistrados <- function(ns, p, titulo, icone) {
                 tabPanel(
                     tagList(icon("chart-column", class = "me-1"), "Gráfico"),
                     
-                    fluidRow(
-                        class = "mt-3",
-                        id = id("grafico_controles"),
-                        column(
-                            4,
-                            selectInput(
-                                id("grafico_agrupar"), "Agrupar por",
-                                choices = names(AGRUPAMENTOS_BASE_MAGISTRADOS),
-                                selected = "Cargo",
-                                width = "100%"
-                            )
-                        ),
-                        conditionalPanel(
-                            # "Exibir" não se aplica à pizza (ver AGRUPAMENTOS_PIZZA_MAGISTRADOS).
-                            condition = sprintf(
-                                "%s.indexOf(input['%s']) < 0",
-                                jsonlite::toJSON(AGRUPAMENTOS_PIZZA_MAGISTRADOS), id("grafico_agrupar")
-                            ),
-                            class = "col-sm-4",
-                            selectInput(
-                                id("grafico_qtd"), "Exibir",
-                                choices = c(
-                                    "Os 20 maiores grupos" = "20",
-                                    "Os 50 maiores grupos" = "50",
-                                    "Todos os grupos" = "0"
-                                ),
-                                selected = "20",
-                                width = "100%"
-                            )
-                        )
-                    ),
-                    
-                    girafeOutput(id("grafico"))
+                    ui_grafico_agrupado(id, AGRUPAMENTOS_BASE_MAGISTRADOS, AGRUPAMENTOS_PIZZA_MAGISTRADOS)
                 ),
                 tabPanel(
                     tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
@@ -1319,240 +1212,24 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         tabela_dt(df)
     })
     
-    # ---- Gráfico (agrupamento selecionável) ----
+    # ---- Gráfico (agrupamento selecionável, pizza ou barras, com a
+    # janela de detalhe na Base) — regras comuns em
+    # servidor_grafico_agrupado() (mod_pessoal_auxiliar.R) ----
     
-    resumo <- reactive({
-        if (nrow(dados()) == 0) {
-            return(list(resumo = NULL, mensagem = FALSE))
-        }
-        
-        df <- filtrados()
-        
-        if (nrow(df) == 0) {
-            return(list(resumo = NULL, mensagem = MSG_SEM_RESULTADO))
-        }
-        
-        agrupar <- valor("grafico_agrupar") %||% "Cargo"
-        regex <- AGRUPAMENTOS_BASE_MAGISTRADOS[[agrupar]]
-        grupos <- valores_coluna_regex(df, regex)
-        
-        if (is.null(grupos)) {
-            return(list(
-                resumo = NULL,
-                mensagem = sprintf("Coluna \"%s\" não encontrada no arquivo carregado.", agrupar)
-            ))
-        }
-        
-        col_cpf <- coluna_por_regex(df, REGEX_COL_CPF)
-        cpfs <- if (is.null(col_cpf)) rep(NA_character_, nrow(df)) else df[[col_cpf]]
-        
-        r <- tibble(Grupo = grupos, CPF = cpfs) %>%
-            group_by(Grupo) %>%
-            summarise(
-                Quantidade = n(),
-                Pessoas = n_distinct(CPF[!is.na(CPF) & CPF != ""]),
-                .groups = "drop"
-            ) %>%
-            arrange(desc(Quantidade), Grupo)
-        
-        list(resumo = r, mensagem = NULL, agrupar = agrupar)
-    })
-    
-    output[[id("grafico")]] <- renderGirafe({
-        r <- resumo()
-        
-        shiny::validate(need(is.null(r$mensagem), r$mensagem))
-        
-        total <- nrow(r$resumo)
-        clicavel <- clique_ativo()
-        
-        grupos <- r$resumo %>%
-            mutate(
-                dica = sprintf(
-                    "<b>%s</b><br/>%s registro(s)<br/>%s magistrado(s) (CPF distintos)%s",
-                    htmltools::htmlEscape(Grupo),
-                    format(Quantidade, big.mark = ".", decimal.mark = ","),
-                    format(Pessoas, big.mark = ".", decimal.mark = ","),
-                    if (clicavel) "<br/><i>Clique para ver os magistrados</i>" else ""
-                )
-            )
-        
-        # Pizza: todas as categorias (as menores viram "Outros"); o
-        # "Exibir" (maiores grupos) só vale para as barras.
-        if (r$agrupar %in% AGRUPAMENTOS_PIZZA_MAGISTRADOS) {
-            return(grafico_pizza_girafe(
-                grupos,
-                titulo = sprintf("Distribuição dos Registros por %s", r$agrupar),
-                subtitulo = sprintf(
-                    "%d grupo(s)%s", total,
-                    if (clicavel) " · clique numa fatia para ver os registros" else ""
-                ),
-                selecionavel = clicavel,
-                cores_fixas = cores_fixas_magistrados(r$agrupar)
-            ))
-        }
-        
-        limite <- suppressWarnings(as.integer(valor("grafico_qtd")))
-        exibido <- if (!is.na(limite) && limite > 0) head(grupos, limite) else grupos
-        
-        grafico_barras_girafe(
-            exibido,
-            titulo = sprintf("Quantidade de Registros por %s", r$agrupar),
-            subtitulo = sprintf(
-                "Exibindo %d de %d grupo(s)%s", nrow(exibido), total,
-                if (clicavel) " · clique numa barra para ver os registros" else ""
-            ),
-            selecionavel = clicavel
+    grafico <- servidor_grafico_agrupado(
+        input, output, session, p, dados, filtrados,
+        cfg = list(
+            agrupamentos = AGRUPAMENTOS_BASE_MAGISTRADOS,
+            pizza = AGRUPAMENTOS_PIZZA_MAGISTRADOS,
+            cores_fixas = cores_fixas_magistrados,
+            detalhe_registros = detalhe_grafico_magistrados,
+            icones = ICONES_AGRUPAMENTO_MAGISTRADOS,
+            pessoas = "magistrado(s)",
+            titulo_pessoas = "Magistrados",
+            nome_csv = nome_csv,
+            detalhe = detalhe_grafico,
+            msg_sem_resultado = MSG_SEM_RESULTADO
         )
-    })
-    
-    # ---- Clique numa barra: janela com os registros do grupo ----
-    # Vale para todas as opções de "Agrupar por" (ver
-    # detalhe_grafico_magistrados()); só onde `detalhe_grafico` = TRUE
-    # (aba Base de Dados).
-    
-    clique_ativo <- reactive({
-        isTRUE(detalhe_grafico) && (valor("grafico_agrupar") %||% "Cargo") %in% names(AGRUPAMENTOS_BASE_MAGISTRADOS)
-    })
-    
-    detalhe_atual <- reactiveVal(NULL)
-    
-    observeEvent(input[[paste0(id("grafico"), "_selected")]], {
-        
-        grupo <- input[[paste0(id("grafico"), "_selected")]]
-        
-        if (length(grupo) == 0 || !clique_ativo()) {
-            return()
-        }
-        
-        grupo <- grupo[[1]]
-        
-        # Fatia "Outros" da pizza: junta vários grupos, não abre janela.
-        if (identical(grupo, ID_FATIA_OUTROS)) {
-            session$sendCustomMessage(paste0(ns(id("grafico")), "_set"), character(0))
-            return()
-        }
-        agrupar <- valor("grafico_agrupar") %||% "Cargo"
-        
-        # Desmarca a barra, para que um novo clique na mesma barra volte a
-        # abrir a janela.
-        session$sendCustomMessage(paste0(ns(id("grafico")), "_set"), character(0))
-        
-        base_grupo <- filtrados()
-        tab <- detalhe_grafico_magistrados(base_grupo, agrupar, grupo)
-        detalhe_atual(list(agrupar = agrupar, grupo = grupo, tabela = tab, dados = base_grupo))
-        
-        n_pessoas <- if ("CPF" %in% names(tab)) {
-            length(unique(chave_cpf(tab$CPF[!is.na(tab$CPF) & tab$CPF != ""])))
-        } else {
-            NA_integer_
-        }
-        
-        fmt <- function(x) format(x, big.mark = ".", decimal.mark = ",")
-        icone <- ICONES_AGRUPAMENTO_MAGISTRADOS[agrupar]
-        if (is.na(icone)) icone <- "chart-column"
-        
-        showModal(modalDialog(
-            title = tagList(
-                icon(icone, class = "me-2"),
-                if (!identical(agrupar, "Cargo")) tags$span(class = "text-muted fw-normal", paste0(agrupar, ": ")),
-                grupo
-            ),
-            size = "xl",
-            easyClose = TRUE,
-            footer = tagList(
-                downloadButton(
-                    ns(id("detalhe_download_csv")),
-                    "Gerar arquivo CSV",
-                    icon = icon("file-csv"),
-                    class = "btn btn-primary"
-                ),
-                modalButton("Fechar")
-            ),
-            
-            div(
-                class = "d-flex flex-wrap gap-4 mb-3",
-                div(tags$small(class = "text-muted d-block", "Registros"), tags$strong(fmt(nrow(tab)))),
-                if (!is.na(n_pessoas)) {
-                    div(tags$small(class = "text-muted d-block", "Magistrados (CPF distintos)"), tags$strong(fmt(n_pessoas)))
-                },
-                div(
-                    tags$small(class = "text-muted d-block", "Filtros"),
-                    tags$span("os mesmos aplicados na aba")
-                )
-            ),
-            
-            radioButtons(
-                ns(id("detalhe_modo")), "Mostrar",
-                choices = c(
-                    "Todos os registros" = "todos",
-                    "Apenas CPFs distintos (situação mais recente de cada um)" = "distintos"
-                ),
-                selected = "todos",
-                inline = TRUE
-            ),
-            
-            DTOutput(ns(id("detalhe_tabela"))),
-            
-            p(
-                class = "text-muted small mt-2 mb-0",
-                "O arquivo CSV traz o que está na tabela acima: a opção \"Mostrar\" escolhida, a busca e os filtros das colunas."
-            )
-        ))
-        
-    }, ignoreInit = TRUE)
-    
-    # Tabela da janela conforme a opção "Mostrar" (todos ou CPFs distintos).
-    detalhe_tabela_exibida <- reactive({
-        d <- detalhe_atual()
-        req(d)
-        if (identical(valor("detalhe_modo"), "distintos")) {
-            detalhe_grafico_magistrados(d$dados, d$agrupar, d$grupo, cpfs_distintos = TRUE)
-        } else {
-            d$tabela
-        }
-    })
-    
-    output[[id("detalhe_tabela")]] <- renderDT({
-        d <- detalhe_atual()
-        shiny::validate(need(!is.null(d) && nrow(d$tabela) > 0, "Nenhum registro para este grupo."))
-        datatable(
-            detalhe_tabela_exibida(),
-            rownames = FALSE,
-            filter = "top",
-            width = "100%",
-            options = list(pageLength = 10, scrollX = TRUE, autoWidth = TRUE)
-        )
-    })
-    
-    # Linhas visíveis da tabela da janela (busca e filtros das colunas).
-    # Índice fora do tamanho atual (troca de "Mostrar" ainda não
-    # refletida no navegador) é descartado.
-    detalhe_linhas_csv <- function(tab) {
-        linhas <- valor("detalhe_tabela_rows_all")
-        if (is.null(linhas)) {
-            return(NULL)
-        }
-        linhas <- linhas[linhas >= 1 & linhas <= nrow(tab)]
-        linhas
-    }
-    
-    output[[id("detalhe_download_csv")]] <- downloadHandler(
-        
-        filename = function() {
-            d <- detalhe_atual()
-            nome_csv_detalhe_magistrados(nome_csv, d$agrupar %||% "grafico", d$grupo %||% "")
-        },
-        
-        content = function(file) {
-            inicio <- Sys.time()
-            tab <- detalhe_tabela_exibida()
-            gravar_csv_tabela(tab, file, detalhe_linhas_csv(tab))
-            showNotification(
-                sprintf("Arquivo CSV gerado em %.2fs.", tempo_decorrido(inicio)),
-                type = "message"
-            )
-        }
     )
     
     # ---- Gerar arquivo CSV ----
@@ -1589,9 +1266,9 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         filtrados = filtrados,
         atualizar_combos = atualizar_combos,
         msg_sem_dados = msg_sem_dados,
-        detalhe = detalhe_atual,
-        detalhe_tabela = detalhe_tabela_exibida,
-        detalhe_linhas_csv = detalhe_linhas_csv
+        detalhe = grafico$detalhe,
+        detalhe_tabela = grafico$detalhe_tabela,
+        detalhe_linhas_csv = grafico$detalhe_linhas_csv
     )
     
 }

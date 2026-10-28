@@ -81,12 +81,19 @@ Em **Magistrados → Base de Dados → Gráfico**, clicar numa barra abre uma ja
 - **demais opções**: CPF, Nome, Cargo, Situação Profissional, Data de Início e Data de Saída da Situação. A coluna agrupada (Órgão, Forma de promoção, Sexo, Raça / Cor, Naturalidade ou Status) entra logo depois do Nome.
 
 Os agrupamentos **Cargo, Sexo, Raça / Cor e Status** (e o gráfico por cargo da aba Alertas) aparecem em **pizza** (rosca):
-- o total fica no centro e o percentual dentro de cada fatia com 4% ou mais;
+- o total fica no centro e o percentual dentro de cada fatia com 5% ou mais;
 - a legenda mostra categoria, quantidade e percentual, da maior para a menor;
 - acima de 8 categorias, as menores viram "Outros";
 - Sexo e Raça / Cor usam as mesmas cores do Painel; em Status, Ativo é verde e Inativo, grafite.
 
 Os demais agrupamentos continuam em barras.
+
+**Pessoal e Auxiliar → Gráfico** segue as mesmas regras, com o mesmo código (`servidor_grafico_agrupado()`):
+- a janela ao clicar numa barra ou fatia da Base de Dados, com Apenas CPFs distintos e o Gerar arquivo CSV;
+- pizza em Cargo, **Área de atuação**, Sexo, Raça / Cor e Status, além do gráfico por cargo da aba Alertas;
+- as mesmas cores fixas.
+
+Na janela de Cargo, a coluna de órgão é a "Órgão de lotação do(a) servidor(a)".
 
 A opção **Mostrar → Apenas CPFs distintos** deixa uma linha por CPF, com a situação mais recente de cada magistrado. O botão **Gerar arquivo CSV** da janela exporta exatamente o que a tabela mostra: a opção escolhida, a busca e os filtros das colunas.
 
