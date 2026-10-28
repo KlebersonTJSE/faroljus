@@ -1815,6 +1815,80 @@ checar("Painel: tipos de deficiência (uma pessoa em mais de um tipo) não viram
        grepl("pn-barras", html_p(3, permite_pizza = FALSE)))
 
 # =====================================================
+cat("\n[19] Serventias: \"Gerar CSV a partir da Base de Dados\" (Alertas e Inconsistências)\n")
+# =====================================================
+
+srv_base_csv <- data.frame(
+    `Código Serventia` = c("0010", "20", "30", "40", "10"),
+    `Nome Serventia` = c("VARA A", "VARA B", "VARA C", "VARA D", "VARA A2"),
+    CEP = c("49000000", "", "49000002", "49000003", "49000004"),
+    Status = c("Ativo", "Ativo", "Ativo", "Ativo", "Inativo"),
+    check.names = FALSE
+)
+tab_aba <- data.frame(`Código Serventia` = c("10", "10", "20", "99", NA), Motivo = "x", check.names = FALSE)
+checar("CSV da base: códigos da tabela sem repetição, sem vazios e sem zeros à esquerda",
+       identical(codigos_serventia_tabela(tab_aba), c("10", "20", "99")))
+rb <- base_por_codigos_serventias(srv_base_csv, codigos_serventia_tabela(tab_aba))
+checar("CSV da base: todos os registros da base com aqueles códigos (com e sem zero), mesmas colunas e ordem",
+       nrow(rb$dados) == 3 && identical(names(rb$dados), names(srv_base_csv)) &&
+           setequal(rb$dados$`Nome Serventia`, c("VARA A", "VARA A2", "VARA B")))
+checar("CSV da base: código da tabela que não está na base é informado", identical(rb$sem_base, "99"))
+checar("CSV da base: botão indisponível sem base ou sem serventias na tabela",
+       !is.null(motivo_csv_base_serventias(srv_base_csv[0, ], tab_aba)) &&
+           !is.null(motivo_csv_base_serventias(srv_base_csv, tab_aba[0, ])) &&
+           is.null(motivo_csv_base_serventias(srv_base_csv, tab_aba)))
+h_ui <- as.character(ui_csv_base_serventias(NS("x"), "download_csv_base"))
+checar("CSV da base: botão \"Gerar CSV a partir da Base de Dados\"",
+       grepl("Gerar CSV a partir da Base de Dados", h_ui, fixed = TRUE) && grepl('id="x-download_csv_base"', h_ui, fixed = TRUE))
+
+# Inconsistências (módulo comum): segundo botão logo abaixo do primeiro,
+# só com as linhas exibidas na tabela.
+inc_dados <- tibble(`Verificação` = "Código duplicado", Gravidade = "Alta",
+                    `Código Serventia` = c("10", "20"), Motivo = "x")
+testServer(mod_inconsistencias_server, args = list(
+    dados = reactive(inc_dados), verificacoes = list("Código duplicado" = list(descricao = "x")),
+    col_entidade = "Código Serventia",
+    csv_extra = list(
+        ui = function(ns, tabela) ui_csv_base_serventias(ns, "download_csv_extra", motivo_csv_base_serventias(srv_base_csv, tabela)),
+        nome = function() "base-teste.csv",
+        gravar = function(tabela, file) gravar_csv_base_serventias(srv_base_csv, tabela, file)
+    )
+), {
+    h <- as.character(output$csv_ui$html)
+    checar("Inconsistências: \"Gerar CSV a partir da Base de Dados\" logo abaixo do \"Gerar arquivo CSV\"",
+           regexpr('id="inc-download_csv"|download_csv"', h) < regexpr("download_csv_extra", h) &&
+               grepl("Gerar CSV a partir da Base de Dados", h, fixed = TRUE))
+    session$setInputs(tabela_rows_all = 1L)
+    arq <- output$download_csv_extra
+    csv <- suppressMessages(readr::read_csv2(arq, col_types = readr::cols(.default = "c"), progress = FALSE))
+    checar("Inconsistências: CSV com a estrutura da base, só as serventias das linhas exibidas (código 10)",
+           identical(names(csv), names(srv_base_csv)) && nrow(csv) == 2 && all(codigo_limpo(csv$`Código Serventia`) == "10"))
+})
+
+# Alertas (módulo Serventias, de ponta a ponta)
+dir.create(pasta_serventias("MPRO"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv2(srv_base_csv, file.path(pasta_serventias("MPRO"), "serventias.csv"))
+readr::write_csv2(data.frame(`Código Serventia` = c("20", "30"), `Nome Serventia` = c("VARA B", "VARA C"),
+                             `Alerta: CEP` = c("CEP inválido", "CEP inválido"), check.names = FALSE),
+                  file.path(pasta_serventias("MPRO"), "alertas_serventias.csv"))
+limpar_cache_arquivos()
+testServer(mod_serventias_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "alertas")
+    h <- as.character(output$csv_ui$html)
+    checar("Alertas: \"Gerar CSV a partir da Base de Dados\" logo abaixo do \"Gerar arquivo CSV\"",
+           grepl("Gerar CSV a partir da Base de Dados", h, fixed = TRUE) &&
+               regexpr('download_csv"', h) < regexpr('download_csv_base"', h) && regexpr('download_csv"', h) > 0)
+    session$setInputs(tabela_rows_all = c(2L))
+    csv <- suppressMessages(readr::read_csv2(output$download_csv_base, col_types = readr::cols(.default = "c"), progress = FALSE))
+    checar("Alertas: CSV com a estrutura da tabela Base de Dados, só a serventia exibida (30)",
+           identical(names(csv), names(base_exibicao())) && nrow(csv) == 1 && csv$`Código Serventia` == "30")
+    session$setInputs(tabela_rows_all = NULL)
+    csv <- suppressMessages(readr::read_csv2(output$download_csv_base, col_types = readr::cols(.default = "c"), progress = FALSE))
+    checar("Alertas: sem filtro na tabela, todas as serventias com alerta (20 e 30)", setequal(csv$`Código Serventia`, c("20", "30")))
+})
+invisible(file.remove(file.path(pasta_serventias("MPRO"), c("serventias.csv", "alertas_serventias.csv"))))
+
+# =====================================================
 
 cat(sprintf("\n%d de %d verificações passaram.\n", total - falhas, total))
 if (falhas > 0) quit(status = 1)

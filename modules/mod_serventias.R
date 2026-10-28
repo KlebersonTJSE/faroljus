@@ -715,6 +715,115 @@ verificar_inconsistencias_serventias <- function(base, lotacoes = NULL) {
 ui_csv_serventias <- ui_csv_dados
 
 # =====================================================
+# "GERAR CSV A PARTIR DA BASE DE DADOS" (abas Alertas e Inconsistências)
+# -----------------------------------------------------
+# Gera um CSV com a MESMA ESTRUTURA da tabela da aba Base de Dados (todas
+# as colunas, na mesma ordem, com os nomes no lugar dos códigos), mas só
+# com as serventias que aparecem na tabela da aba (com os filtros e a
+# busca da tabela aplicados). A busca é pelo Código Serventia, com ou
+# sem zeros à esquerda (codigo_limpo()). Os filtros da aba Base de Dados
+# NÃO se aplicam: entram todos os registros da base com aqueles códigos.
+# =====================================================
+
+# Códigos (limpos, sem repetição) da coluna Código Serventia de `df`.
+codigos_serventia_tabela <- function(df) {
+    col <- if (is.null(df)) NULL else coluna_serventia(df, REGEX_COL_CODIGO_SERVENTIA)
+    if (is.null(col) || nrow(df) == 0) {
+        return(character(0))
+    }
+    codigos <- unique(codigo_limpo(df[[col]]))
+    codigos[!is.na(codigos) & codigos != ""]
+}
+
+# Registros da base cujo Código Serventia está em `codigos`. Devolve
+# list(dados, sem_base): os códigos que não foram encontrados na base.
+base_por_codigos_serventias <- function(base, codigos) {
+    col <- if (is.null(base)) NULL else coluna_serventia(base, REGEX_COL_CODIGO_SERVENTIA)
+    if (is.null(col) || length(codigos) == 0) {
+        return(list(dados = if (is.null(base)) data.frame() else base[0, , drop = FALSE], sem_base = codigos))
+    }
+    cod_base <- codigo_limpo(base[[col]])
+    list(
+        dados = base[!is.na(cod_base) & cod_base %in% codigos, , drop = FALSE],
+        sem_base = setdiff(codigos, cod_base)
+    )
+}
+
+# Botão (logo abaixo do "Gerar arquivo CSV"). `motivo`: texto quando não
+# dá para gerar (sem base, sem serventias na tabela).
+ui_csv_base_serventias <- function(ns, id_download, motivo = NULL) {
+    div(
+        class = "mt-4",
+        style = "max-width: 420px;",
+        p(
+            class = "text-muted",
+            "Gera um arquivo .csv com a mesma estrutura da tabela da aba \"Base de Dados\", só com as serventias ",
+            "que aparecem na tabela desta aba (busca pelo Código Serventia)."
+        ),
+        if (is.null(motivo)) {
+            downloadButton(
+                ns(id_download),
+                "Gerar CSV a partir da Base de Dados",
+                icon = icon("database"),
+                class = "btn btn-outline-primary btn-acao"
+            )
+        } else {
+            tagList(
+                tags$button(
+                    type = "button",
+                    class = "btn btn-outline-primary btn-acao",
+                    disabled = "disabled",
+                    icon("database", class = "me-2"),
+                    "Gerar CSV a partir da Base de Dados"
+                ),
+                div(class = "text-muted mt-2", style = "font-size: .82rem;", motivo)
+            )
+        }
+    )
+}
+
+# Por que o botão está indisponível (NULL = disponível).
+motivo_csv_base_serventias <- function(base, tabela) {
+    if (is.null(base) || nrow(base) == 0) {
+        return("Não há arquivo de Serventias na aba Base de Dados.")
+    }
+    if (is.null(coluna_serventia(base, REGEX_COL_CODIGO_SERVENTIA))) {
+        return("A base de Serventias não tem a coluna Código Serventia.")
+    }
+    if (length(codigos_serventia_tabela(tabela)) == 0) {
+        return("Não há serventias na tabela para buscar na base.")
+    }
+    NULL
+}
+
+# Grava o CSV e avisa quantas serventias/registros saíram e quais códigos
+# da tabela não estão na base.
+gravar_csv_base_serventias <- function(base, tabela, file) {
+    inicio <- Sys.time()
+    codigos <- codigos_serventia_tabela(tabela)
+    r <- base_por_codigos_serventias(base, codigos)
+    readr::write_excel_csv2(r$dados, file, na = "")
+    showNotification(
+        paste0(
+            sprintf(
+                "Arquivo CSV gerado em %.2fs: %d registro(s) da base para %d serventia(s).",
+                tempo_decorrido(inicio), nrow(r$dados), length(codigos) - length(r$sem_base)
+            ),
+            if (length(r$sem_base) > 0) {
+                sprintf(
+                    " %d código(s) da tabela não estão na base: %s%s.",
+                    length(r$sem_base), paste(head(r$sem_base, 10), collapse = ", "),
+                    if (length(r$sem_base) > 10) "..." else ""
+                )
+            }
+        ),
+        type = if (length(r$sem_base) > 0) "warning" else "message",
+        duration = 10
+    )
+    invisible(r)
+}
+
+# =====================================================
 # NOVO ENVIO — SERVENTIAS COM ALERTA
 # -----------------------------------------------------
 # O arquivo de Serventias não tem CPF nem datas de situação, então a
@@ -2389,10 +2498,33 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
             )
         })
         
+        # Linhas da tabela exibidas (filtros e busca da própria tabela).
+        tabela_visivel <- function() {
+            df <- tabela_exibicao()
+            linhas <- input$tabela_rows_all
+            if (!is.null(linhas)) {
+                linhas <- linhas[linhas >= 1 & linhas <= nrow(df)]
+                df <- df[linhas, , drop = FALSE]
+            }
+            df
+        }
+        
         output$csv_ui <- renderUI({
             df <- tabela_exibicao()
-            ui_csv_serventias(ns, "download_csv", !is.null(df) && nrow(df) > 0)
+            tagList(
+                ui_csv_serventias(ns, "download_csv", !is.null(df) && nrow(df) > 0),
+                ui_csv_base_serventias(ns, "download_csv_base", motivo_csv_base_serventias(base_exibicao(), df))
+            )
         })
+        
+        output$download_csv_base <- downloadHandler(
+            filename = function() {
+                paste0("base-serventias-com-alertas-", format(Sys.time(), "%Y%m%d%H%M"), ".csv")
+            },
+            content = function(file) {
+                gravar_csv_base_serventias(base_exibicao(), tabela_visivel(), file)
+            }
+        )
         
         output$download_csv <- downloadHandler(
             
@@ -2484,7 +2616,16 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
             col_entidade = "Código Serventia",
             rotulo_entidade = "serventia(s)",
             filtros_texto = FILTROS_TEXTO_INC_SERVENTIAS,
-            prefixo_csv = "inconsistencias-serventias"
+            prefixo_csv = "inconsistencias-serventias",
+            # "Gerar CSV a partir da Base de Dados" (logo abaixo do
+            # "Gerar arquivo CSV").
+            csv_extra = list(
+                ui = function(ns, tabela) {
+                    ui_csv_base_serventias(ns, "download_csv_extra", motivo_csv_base_serventias(base_exibicao(), tabela))
+                },
+                nome = function() paste0("base-serventias-com-inconsistencias-", format(Sys.time(), "%Y%m%d%H%M"), ".csv"),
+                gravar = function(tabela, file) gravar_csv_base_serventias(base_exibicao(), tabela, file)
+            )
         )
         
     })
