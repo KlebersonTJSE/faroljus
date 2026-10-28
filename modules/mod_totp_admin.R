@@ -180,12 +180,12 @@ mod_totp_admin_ui <- function(id) {
                     column(
                         6,
                         h5("Acessos por usuário", style = "margin-top: 20px;"),
-                        plotOutput(ns("grafico_auditoria_usuarios"), height = "420px")
+                        plotOutput(ns("grafico_auditoria_usuarios"), height = "auto")
                     ),
                     column(
                         6,
                         h5("Acessos por empresa", style = "margin-top: 20px;"),
-                        plotOutput(ns("grafico_auditoria_empresas"), height = "420px")
+                        plotOutput(ns("grafico_auditoria_empresas"), height = "auto")
                     )
                 ),
                 
@@ -193,7 +193,7 @@ mod_totp_admin_ui <- function(id) {
                     column(
                         6,
                         h5("Acessos por método", style = "margin-top: 24px;"),
-                        plotOutput(ns("grafico_auditoria_metodo"), height = "420px")
+                        plotOutput(ns("grafico_auditoria_metodo"), height = "auto")
                     ),
                     column(
                         6,
@@ -568,77 +568,53 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
         
         # -- Gráficos (acessos por usuário e por empresa, no período) ----
         
+        # Usuário, empresa e método: tipo do gráfico automático pela
+        # quantidade de grupos (pizza até 6, barras verticais de 7 a 8,
+        # horizontais de 9 em diante) e paleta da aplicação — ver
+        # grafico_automatico_gg() em mod_pessoal_auxiliar.R. Versão
+        # estática (renderPlot), com a legenda da pizza embaixo, porque
+        # cada gráfico ocupa meia largura.
+        # Sem título no gráfico: o título fica no cabeçalho (h5) acima.
+        grafico_auditoria <- function(valores) {
+            contagem <- sort(table(valores), decreasing = TRUE)
+            resumo <- tibble::tibble(Grupo = names(contagem), Quantidade = as.integer(contagem))
+            grafico_automatico_gg(
+                resumo, titulo = NULL, cores_fixas = NULL,
+                interativo = FALSE, legenda = "bottom", largura = 6
+            )$grafico
+        }
+        
+        # Altura: as barras horizontais crescem com a quantidade de grupos.
+        altura_auditoria <- function(valores) {
+            n <- length(unique(valores))
+            if (tipo_grafico_automatico(n) == "barras") max(420, 30 * n + 110) else 420
+        }
+        
+        sem_acessos <- function() {
+            plot.new()
+            text(0.5, 0.5, "Nenhum acesso no período selecionado.")
+            invisible(NULL)
+        }
+        
         output$grafico_auditoria_usuarios <- renderPlot({
-            
             dados <- dadosAuditoriaPeriodo()
-            
-            if (nrow(dados) == 0) {
-                plot.new()
-                text(0.5, 0.5, "Nenhum acesso no período selecionado.")
-                return(invisible(NULL))
-            }
-            
-            contagem <- sort(table(dados$login), decreasing = TRUE)
-            cores <- grDevices::hcl.colors(length(contagem), palette = "Set2")
-            
-            barplot(
-                contagem,
-                las = 2,
-                col = cores,
-                main = "Quantidade de acessos por usuário",
-                ylab = "Acessos",
-                cex.names = 0.85
-            )
-        })
+            if (nrow(dados) == 0) return(sem_acessos())
+            grafico_auditoria(dados$login)
+        }, height = function() altura_auditoria(dadosAuditoriaPeriodo()$login))
         
         output$grafico_auditoria_empresas <- renderPlot({
-            
             dados <- dadosAuditoriaPeriodo()
-            
-            if (nrow(dados) == 0) {
-                plot.new()
-                text(0.5, 0.5, "Nenhum acesso no período selecionado.")
-                return(invisible(NULL))
-            }
-            
-            contagem <- sort(table(dados$empresa), decreasing = TRUE)
-            cores <- grDevices::hcl.colors(length(contagem), palette = "Set2")
-            
-            pie(
-                contagem,
-                col = cores,
-                labels = paste0(names(contagem), " (", contagem, ")"),
-                main = "Acessos por empresa"
-            )
-        })
+            if (nrow(dados) == 0) return(sem_acessos())
+            grafico_auditoria(dados$empresa)
+        }, height = function() altura_auditoria(dadosAuditoriaPeriodo()$empresa))
         
-        # Acessos por método (AD x TOTP) — barplot HORIZONTAL, um modelo
-        # diferente do barplot vertical simples usado em "por usuário".
+        # "AD:TJSE", "AD:MPRO" etc. viram só "AD" aqui — a quebra por
+        # empresa já aparece no gráfico ao lado.
         output$grafico_auditoria_metodo <- renderPlot({
-            
             dados <- dadosAuditoriaPeriodo()
-            
-            if (nrow(dados) == 0) {
-                plot.new()
-                text(0.5, 0.5, "Nenhum acesso no período selecionado.")
-                return(invisible(NULL))
-            }
-            
-            # "AD:TJSE", "AD:MPRO" etc. viram só "AD" aqui — a quebra por
-            # empresa já é mostrada no gráfico de pizza ao lado.
-            metodo_base <- sub(":.*$", "", dados$metodo)
-            contagem <- sort(table(metodo_base), decreasing = TRUE)
-            cores <- grDevices::hcl.colors(length(contagem), palette = "Viridis")
-            
-            barplot(
-                contagem,
-                horiz = TRUE,
-                las = 1,
-                col = cores,
-                main = "Quantidade de acessos por método",
-                xlab = "Acessos"
-            )
-        })
+            if (nrow(dados) == 0) return(sem_acessos())
+            grafico_auditoria(sub(":.*$", "", dados$metodo))
+        }, height = function() altura_auditoria(sub(":.*$", "", dadosAuditoriaPeriodo()$metodo)))
         
         # Acessos por período do dia, comparando sucesso x falha — barplot
         # AGRUPADO (duas barras lado a lado por período), outro modelo
@@ -661,7 +637,9 @@ mod_totp_admin_server <- function(id, con, ativo, resetar = reactiveVal(0)) {
                 factor(dados$periodo, levels = niveis)
             )
             
-            cores <- grDevices::hcl.colors(2, palette = "Dark 3")
+            # Duas medidas por período (sucesso x falha): barras agrupadas,
+            # com as cores da paleta da aplicação.
+            cores <- unname(PALETA_GRAFICOS[c("verde", "laranja")])
             
             barplot(
                 tab,

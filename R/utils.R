@@ -325,7 +325,7 @@ limpar_cache_arquivos <- function(pasta = NULL) {
 # comparativos e indicadores do Painel). Barras de série única usam
 # COR_GRAFICO; ao passar o mouse, COR_GRAFICO_DESTAQUE.
 # Quando há mais categorias que cores, paleta_graficos() acrescenta
-# tons mais claros das mesmas cores (nunca outras cores).
+# tons mais claros e mais escuros das mesmas cores (nunca outras cores).
 # =====================================================
 
 PALETA_GRAFICOS <- c(
@@ -352,9 +352,18 @@ clarear_cor <- function(cor, fator) {
     grDevices::rgb(novo[1, ], novo[2, ], novo[3, ], maxColorValue = 255)
 }
 
-# `n` cores: as 5 da paleta e, depois, tons 40% e 65% mais claros delas.
+# Escurece uma cor hex misturando-a com preto (`fator` de 0 a 1).
+escurecer_cor <- function(cor, fator) {
+    rgb_cor <- grDevices::col2rgb(cor)
+    novo <- rgb_cor * (1 - fator)
+    grDevices::rgb(novo[1, ], novo[2, ], novo[3, ], maxColorValue = 255)
+}
+
+# `n` cores: as 5 da paleta, depois tons 40% mais claros e, por fim, 35%
+# mais escuros delas (tons muito claros sumiriam nas barras pequenas).
+# Passando de 15, as cores se repetem.
 paleta_graficos <- function(n = length(PALETA_GRAFICOS)) {
     base <- unname(PALETA_GRAFICOS)
-    todas <- c(base, clarear_cor(base, 0.40), clarear_cor(base, 0.65))
+    todas <- c(base, clarear_cor(base, 0.40), escurecer_cor(base, 0.35))
     rep_len(todas, n)
 }

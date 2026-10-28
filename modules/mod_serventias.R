@@ -52,7 +52,6 @@ library(purrr)
 library(stringr)
 library(ggplot2)
 library(DT)
-library(echarts4r)
 library(ggiraph)
 library(readxl)   # leitura direta de .xlsx
 
@@ -872,35 +871,9 @@ ui_aba_cadastro_serventias <- function(ns, p, titulo, icone) {
                 tabPanel(
                     tagList(icon("chart-column", class = "me-1"), "Gráfico"),
                     
-                    fluidRow(
-                        class = "mt-3",
-                        id = id("grafico_controles"),
-                        column(
-                            4,
-                            selectInput(
-                                id("grafico_agrupar"), "Agrupar por",
-                                choices = names(AGRUPAMENTOS_SERVENTIAS),
-                                selected = "CEP",
-                                width = "100%"
-                            )
-                        ),
-                        column(
-                            4,
-                            selectInput(
-                                id("grafico_qtd"),
-                                "Exibir",
-                                choices = c(
-                                    "Os 20 maiores grupos" = "20",
-                                    "Os 50 maiores grupos" = "50",
-                                    "Todos os grupos" = "0"
-                                ),
-                                selected = "20",
-                                width = "100%"
-                            )
-                        )
-                    ),
-                    
-                    girafeOutput(id("grafico_cep"))
+                    # Mesmos controles de Magistrados e Pessoal e Auxiliar
+                    # ("Agrupar por" e "Exibir" na mesma linha).
+                    ui_grafico_agrupado(id, AGRUPAMENTOS_SERVENTIAS, agrupar_padrao = "CEP", id_grafico = "grafico_cep")
                 ),
                 tabPanel(
                     tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
@@ -1055,6 +1028,10 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
         list(resumo = resumo, mensagem = NULL, agrupar = agrupar)
     })
     
+    # Tipo do gráfico automático pela quantidade de grupos exibidos
+    # (grafico_automatico_girafe()). Município abrangido e Competência
+    # são de valores múltiplos (uma serventia entra em vários grupos):
+    # sem pizza, e o percentual é sobre o total de serventias.
     output[[id("grafico_cep")]] <- renderGirafe({
         r <- resumo_cep()
         
@@ -1065,44 +1042,29 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
         
         resumo <- if (!is.na(limite) && limite > 0) head(r$resumo, limite) else r$resumo
         prefixo <- if (identical(r$agrupar, "CEP")) "CEP " else ""
+        multiplo <- r$agrupar %in% AGRUPAMENTOS_MULTIPLOS_SERVENTIAS
         
         resumo <- resumo %>%
-            arrange(Quantidade, desc(Grupo)) %>%   # com coord_flip, a maior fica no topo
             mutate(
-                rotulo = str_wrap(paste0(prefixo, Grupo), 45),
-                rotulo = factor(rotulo, levels = unique(rotulo)),
+                Rotulo = paste0(prefixo, Grupo),
                 dica = sprintf(
                     "<b>%s</b><br/>%s serventia(s)%s",
-                    htmltools::htmlEscape(paste0(prefixo, Grupo)),
-                    format(Quantidade, big.mark = ".", decimal.mark = ","),
+                    htmltools::htmlEscape(Rotulo),
+                    fmt_qtd_grafico(Quantidade),
                     ifelse(Serventias == "", "", paste0("<hr style='margin:4px 0'/>", Serventias))
                 )
             )
         
-        p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
-            geom_col_interactive(aes(tooltip = dica, data_id = Grupo), fill = COR_GRAFICO) +
-            geom_text(aes(label = Quantidade), hjust = -0.2, size = 3.2) +
-            coord_flip() +
-            scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
-            labs(
-                title = sprintf("Quantidade de Serventias por %s", r$agrupar),
-                subtitle = sprintf("Exibindo %d de %d grupo(s)", nrow(resumo), total),
-                x = "",
-                y = "Quantidade"
-            ) +
-            theme_minimal()
-        
-        linhas_rotulo <- sum(str_count(levels(resumo$rotulo), "\n") + 1)
-        
-        girafe(
-            ggobj = p,
-            width_svg = 9,
-            height_svg = max(3, 0.28 * max(nrow(resumo), linhas_rotulo) + 1.6),
-            options = list(
-                opts_hover(css = CSS_HOVER_GRAFICO),
-                opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
-                opts_sizing(rescale = TRUE, width = 1)
-            )
+        grafico_automatico_girafe(
+            resumo,
+            titulo = sprintf("Serventias por %s", r$agrupar),
+            subtitulo = sprintf(
+                "Exibindo %d de %d grupo(s)%s", nrow(resumo), total,
+                if (multiplo) " · uma serventia pode estar em mais de um grupo" else ""
+            ),
+            cores_fixas = cores_fixas_comuns(r$agrupar),
+            total_geral = if (multiplo) nrow(filtrados()) else sum(r$resumo$Quantidade),
+            permite_pizza = !multiplo
         )
     })
     
@@ -2320,7 +2282,7 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
             )
         })
         
-        # ---- Gráficos: tipo de Alerta/Conflito (echarts4r) e Status (ggiraph) ----
+        # ---- Gráficos: tipo de Alerta/Conflito e Status ----
         
         resumo_tipos <- reactive({
             if (nrow(dados()) == 0) {
@@ -2386,30 +2348,26 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
             list(resumo = resumo, mensagem = NULL)
         })
         
+        # Tipo de Alerta/Conflito e Status: tipo do gráfico automático
+        # pela quantidade de grupos (grafico_automatico_girafe()).
         output$grafico_ui <- renderUI({
-            r <- resumo_tipos()
-            n <- if (is.null(r$resumo)) 0 else nrow(r$resumo)
-            altura <- if (n == 0) 120 else max(320, 40 * n + 110)
-            
-            echarts4rOutput(ns("grafico"), height = paste0(altura, "px"))
+            girafeOutput(ns("grafico"))
         })
         
-        output$grafico <- renderEcharts4r({
+        output$grafico <- renderGirafe({
             r <- resumo_tipos()
             
             shiny::validate(need(is.null(r$mensagem), r$mensagem))
             
-            r$resumo %>%
-                e_charts(Tipo) %>%
-                e_bar(Quantidade, name = "Registros") %>%
-                e_flip_coords() %>%
-                e_labels(position = "right") %>%
-                e_color(COR_GRAFICO) %>%
-                e_title("Quantidade de Registros por Tipo de Alerta/Conflito") %>%
-                e_tooltip(trigger = "item") %>%
-                e_legend(show = FALSE) %>%
-                e_grid(containLabel = TRUE, left = "2%", right = "8%") %>%
-                e_toolbox_feature(feature = "saveAsImage")
+            resumo <- r$resumo %>%
+                transmute(
+                    Grupo = str_squish(gsub("\n", " ", Tipo)),
+                    Quantidade,
+                    dica = sprintf("<b>%s</b><br/>%s registro(s)", htmltools::htmlEscape(Grupo), fmt_qtd_grafico(Quantidade))
+                ) %>%
+                filter(Quantidade > 0)
+            
+            grafico_automatico_girafe(resumo, titulo = "Registros por Tipo de Alerta/Conflito")
         })
         
         output$grafico_status <- renderGirafe({
@@ -2418,32 +2376,16 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
             shiny::validate(need(is.null(r$mensagem), r$mensagem))
             
             resumo <- r$resumo %>%
-                mutate(
-                    rotulo = str_wrap(Status, 45),
-                    rotulo = factor(rotulo, levels = unique(rotulo)),
-                    dica = sprintf(
-                        "<b>%s</b><br/>%s registro(s)",
-                        htmltools::htmlEscape(Status),
-                        format(Quantidade, big.mark = ".", decimal.mark = ",")
-                    )
+                transmute(
+                    Grupo = Status,
+                    Quantidade,
+                    dica = sprintf("<b>%s</b><br/>%s registro(s)", htmltools::htmlEscape(Status), fmt_qtd_grafico(Quantidade))
                 )
             
-            p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
-                geom_col_interactive(aes(tooltip = dica, data_id = Status), fill = COR_GRAFICO) +
-                geom_text(aes(label = Quantidade), hjust = -0.2) +
-                coord_flip() +
-                scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
-                labs(title = "Quantidade de Registros por Status", x = "", y = "Quantidade") +
-                theme_minimal()
-            
-            girafe(
-                ggobj = p,
-                width_svg = 9,
-                height_svg = max(3, 0.45 * nrow(resumo) + 1.5),
-                options = list(
-                    opts_hover(css = CSS_HOVER_GRAFICO),
-                    opts_sizing(rescale = TRUE, width = 1)
-                )
+            grafico_automatico_girafe(
+                resumo,
+                titulo = "Registros por Status",
+                cores_fixas = cores_fixas_comuns("Status")
             )
         })
         

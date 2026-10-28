@@ -59,7 +59,6 @@ library(purrr)
 library(stringr)
 library(ggplot2)
 library(DT)
-library(echarts4r)
 library(ggiraph)
 library(readxl)
 
@@ -101,7 +100,7 @@ local({
         "normalizar_texto_busca",
         "texto_busca_linhas",
         "ui_csv_dados",
-        "grafico_barras_girafe",
+        "grafico_automatico_girafe",
         "normalizar_nome_arquivo",
         "REGEX_COL_CPF",
         "REGEX_COL_NOME",
@@ -233,11 +232,6 @@ AGRUPAMENTOS_BASE_MAGISTRADOS <- c(
     "Naturalidade"                 = REGEX_COL_NATURALIDADE,
     "Status"                       = REGEX_COL_STATUS_MAGISTRADO
 )
-
-# Agrupamentos mostrados em PIZZA (rosca) em vez de barras: poucas
-# categorias, em que o que interessa é a proporção do todo. Os demais
-# (Situação, Órgão, Forma de promoção, Naturalidade) continuam em barras.
-AGRUPAMENTOS_PIZZA_MAGISTRADOS <- c("Cargo", "Sexo", "Raça / Cor", "Status")
 
 # Cores fixas por categoria, para a mesma categoria ter sempre a mesma
 # cor: Sexo, Raça/Cor e Status como em cores_fixas_comuns(); Cargo com
@@ -1071,7 +1065,7 @@ ui_aba_cadastro_magistrados <- function(ns, p, titulo, icone) {
                 tabPanel(
                     tagList(icon("chart-column", class = "me-1"), "Gráfico"),
                     
-                    ui_grafico_agrupado(id, AGRUPAMENTOS_BASE_MAGISTRADOS, AGRUPAMENTOS_PIZZA_MAGISTRADOS)
+                    ui_grafico_agrupado(id, AGRUPAMENTOS_BASE_MAGISTRADOS)
                 ),
                 tabPanel(
                     tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
@@ -1220,7 +1214,6 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         input, output, session, p, dados, filtrados,
         cfg = list(
             agrupamentos = AGRUPAMENTOS_BASE_MAGISTRADOS,
-            pizza = AGRUPAMENTOS_PIZZA_MAGISTRADOS,
             cores_fixas = cores_fixas_magistrados,
             detalhe_registros = detalhe_grafico_magistrados,
             icones = ICONES_AGRUPAMENTO_MAGISTRADOS,
@@ -2446,7 +2439,7 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
             )
         })
         
-        # ---- Gráficos: tipo de Alerta/Conflito (echarts4r) e Cargo (ggiraph) ----
+        # ---- Gráficos: tipo de Alerta/Conflito e Cargo ----
         
         resumo_tipos <- reactive({
             if (nrow(dados()) == 0) {
@@ -2510,30 +2503,26 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
             list(resumo = resumo, mensagem = NULL)
         })
         
+        # Tipo de Alerta/Conflito e Cargo: tipo do gráfico automático
+        # pela quantidade de grupos (grafico_automatico_girafe()).
         output$grafico_ui <- renderUI({
-            r <- resumo_tipos()
-            n <- if (is.null(r$resumo)) 0 else nrow(r$resumo)
-            altura <- if (n == 0) 120 else max(320, 40 * n + 110)
-            
-            echarts4rOutput(ns("grafico"), height = paste0(altura, "px"))
+            girafeOutput(ns("grafico"))
         })
         
-        output$grafico <- renderEcharts4r({
+        output$grafico <- renderGirafe({
             r <- resumo_tipos()
             
             shiny::validate(need(is.null(r$mensagem), r$mensagem))
             
-            r$resumo %>%
-                e_charts(Tipo) %>%
-                e_bar(Quantidade, name = "Registros") %>%
-                e_flip_coords() %>%
-                e_labels(position = "right") %>%
-                e_color(COR_GRAFICO) %>%
-                e_title("Quantidade de Registros por Tipo de Alerta/Conflito") %>%
-                e_tooltip(trigger = "item") %>%
-                e_legend(show = FALSE) %>%
-                e_grid(containLabel = TRUE, left = "2%", right = "8%") %>%
-                e_toolbox_feature(feature = "saveAsImage")
+            resumo <- r$resumo %>%
+                transmute(
+                    Grupo = str_squish(gsub("\n", " ", Tipo)),
+                    Quantidade,
+                    dica = sprintf("<b>%s</b><br/>%s registro(s)", htmltools::htmlEscape(Grupo), fmt_qtd_grafico(Quantidade))
+                ) %>%
+                filter(Quantidade > 0)
+            
+            grafico_automatico_girafe(resumo, titulo = "Registros por Tipo de Alerta/Conflito")
         })
         
         output$grafico_cargo <- renderGirafe({
@@ -2545,16 +2534,12 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
                 transmute(
                     Grupo = Cargo,
                     Quantidade,
-                    dica = sprintf(
-                        "<b>%s</b><br/>%s registro(s)",
-                        htmltools::htmlEscape(Cargo),
-                        format(Quantidade, big.mark = ".", decimal.mark = ",")
-                    )
+                    dica = sprintf("<b>%s</b><br/>%s registro(s)", htmltools::htmlEscape(Cargo), fmt_qtd_grafico(Quantidade))
                 )
             
-            grafico_pizza_girafe(
+            grafico_automatico_girafe(
                 resumo,
-                titulo = "Distribuição dos Registros por Cargo",
+                titulo = "Registros por Cargo",
                 cores_fixas = cores_fixas_magistrados("Cargo")
             )
         })
