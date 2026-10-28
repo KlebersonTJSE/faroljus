@@ -75,7 +75,12 @@ O botão **Gerenciar Arquivos** abre uma janela para enviar um ou mais arquivos 
 - **Gráfico**: quantidade de registros por tipo de alerta/conflito e por cargo;
 - **Gerar arquivo CSV**: exporta exatamente o que está na tabela, respeitando os filtros e a busca da própria tabela.
 
-Em **Magistrados → Base de Dados → Gráfico**, com **Agrupar por = Cargo**, clicar numa barra abre uma janela com o resumo (registros e magistrados distintos) e os registros daquele cargo: CPF, Nome, Órgão de lotação do magistrado(a), Cargo, Situação Profissional e Data de Início da Situação, respeitando os filtros da aba. A opção **Mostrar → Apenas CPFs distintos** deixa uma linha por CPF, com a situação mais recente de cada magistrado.
+Em **Magistrados → Base de Dados → Gráfico**, clicar numa barra abre uma janela com o resumo (registros e magistrados distintos) e os registros daquele grupo, respeitando os filtros da aba. Isso vale para qualquer opção de **Agrupar por**:
+
+- **Cargo**: CPF, Nome, Órgão de lotação do magistrado(a), Cargo, Situação Profissional e Data de Início da Situação;
+- **demais opções**: CPF, Nome, Cargo, Situação Profissional, Data de Início e Data de Saída da Situação. A coluna agrupada (Órgão, Forma de promoção, Sexo, Raça / Cor, Naturalidade ou Status) entra logo depois do Nome.
+
+A opção **Mostrar → Apenas CPFs distintos** deixa uma linha por CPF, com a situação mais recente de cada magistrado. O botão **Gerar arquivo CSV** da janela exporta exatamente o que a tabela mostra: a opção escolhida, a busca e os filtros das colunas.
 
 Todas as janelas têm um **X** no canto superior direito, que fecha como o botão Fechar/Cancelar.
 

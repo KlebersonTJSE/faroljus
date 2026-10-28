@@ -1541,7 +1541,7 @@ checar("R/tabelas_referencia.R carrega sozinho (autoload do Shiny, antes dos mó
        !inherits(r_autoload, "try-error"))
 
 # =====================================================
-cat("\n[16] Magistrados: clique na barra de Cargo abre os registros; paleta dos gráficos\n")
+cat("\n[16] Magistrados: clique nas barras do gráfico abre os registros (com CSV); paleta dos gráficos\n")
 # =====================================================
 
 mag_exib <- traduzir_codigos_magistrados(mag_base_ne)
@@ -1566,6 +1566,15 @@ dz <- data.frame(CPF = c("1001715594", "01001715594", "", ""), Nome = c("A", "A"
 dz_d <- detalhe_cargo_magistrados(dz, "X", cpfs_distintos = TRUE)
 checar("CPFs distintos: CPF com e sem zero à esquerda é o mesmo; registro sem data não vence o datado; linhas sem CPF ficam",
        nrow(dz_d) == 3 && dz_d$`Data de Início da Situação`[dz_d$Nome == "A"] == "01/01/2020")
+orgao_det <- detalhe_grafico_magistrados(mag_exib, "Órgão de lotação", "32")
+checar("Detalhe (Órgão de lotação): a coluna do órgão entra logo depois do Nome, com o nome do arquivo",
+       nrow(orgao_det) == 2 && identical(names(orgao_det)[1:3], c("CPF", "Nome", "Órgão de lotação do magistrado(a)")) &&
+           "Data de Saída da Situação" %in% names(orgao_det))
+checar("Detalhe: todas as opções de Agrupar por têm ícone na janela",
+       setequal(names(ICONES_AGRUPAMENTO_MAGISTRADOS), names(AGRUPAMENTOS_BASE_MAGISTRADOS)))
+checar("Detalhe: nome do CSV com agrupamento e valor, sem acentos/símbolos",
+       identical(nome_csv_detalhe_magistrados("base-magistrados", "Raça / Cor", "Negro(a)-Pardo(a)", as.POSIXct("2026-10-28 08:00")),
+                 "base-magistrados-raca-cor-negro-a-pardo-a-202610280800.csv"))
 checar("Detalhe do cargo: data serial do Excel vira dd/mm/aaaa",
        identical(detalhe_cargo_magistrados(data.frame(Cargo = "X", `Data de início da situação` = "46279", check.names = FALSE), "X")$`Data de Início da Situação`,
                  format(as.Date(46279, origin = "1899-12-30"), "%d/%m/%Y")))
@@ -1579,24 +1588,49 @@ testServer(mod_magistrados_server, args = list(empresa = reactive("MPRO"), ativo
                       base_orgao = "Todos", base_cpf = "", base_nome = "", base_detalhe = "",
                       base_grafico_agrupar = "Cargo", base_grafico_qtd = "20")
     session$setInputs(base_grafico_selected = cargo_2)
-    d <- aba_base$detalhe_cargo()
+    d <- aba_base$detalhe()
     checar("Base > Gráfico (Cargo): clicar na barra abre a janela com os registros do cargo",
-           !is.null(d) && identical(d$cargo, cargo_2) && nrow(d$tabela) == 5)
-    session$setInputs(base_detalhe_cargo_modo = "distintos")
+           !is.null(d) && identical(d$grupo, cargo_2) && identical(d$agrupar, "Cargo") && nrow(d$tabela) == 5)
+    session$setInputs(base_detalhe_modo = "distintos")
     checar("Janela: opção \"Apenas CPFs distintos\" mostra um registro por CPF",
-           nrow(aba_base$detalhe_cargo_tabela()) == 4)
-    session$setInputs(base_detalhe_cargo_modo = "todos")
-    checar("Janela: voltar para \"Todos os registros\" mostra todos", nrow(aba_base$detalhe_cargo_tabela()) == 5)
+           nrow(aba_base$detalhe_tabela()) == 4)
+
+    # CSV da janela: o que está na tabela (opção Mostrar + busca/filtros do DT).
+    arq <- tempfile(fileext = ".csv")
+    gravar_csv_tabela(aba_base$detalhe_tabela(), arq, aba_base$detalhe_linhas_csv(aba_base$detalhe_tabela()))
+    csv <- suppressMessages(readr::read_csv2(arq, col_types = readr::cols(.default = "c"), progress = FALSE))
+    checar("Janela > Gerar arquivo CSV: mesmas colunas e linhas da tabela exibida (CPFs distintos)",
+           identical(names(csv), names(aba_base$detalhe_tabela())) && nrow(csv) == 4)
+    session$setInputs(base_detalhe_tabela_rows_all = c(1L, 3L, 99L))
+    checar("Janela > Gerar arquivo CSV: respeita a busca/filtros da tabela (e ignora índice inválido)",
+           identical(aba_base$detalhe_linhas_csv(aba_base$detalhe_tabela()), c(1L, 3L)))
+    session$setInputs(base_detalhe_tabela_rows_all = NULL)
+    session$setInputs(base_detalhe_modo = "todos")
+    checar("Janela: voltar para \"Todos os registros\" mostra todos", nrow(aba_base$detalhe_tabela()) == 5)
+
     session$setInputs(base_status = "Ativo")
     session$setInputs(base_grafico_selected = character(0))
     session$setInputs(base_grafico_selected = cargo_2)
     checar("Base > Gráfico (Cargo): a janela respeita os filtros da aba (Status Ativo)",
-           nrow(aba_base$detalhe_cargo()$tabela) == 2)
-    aba_base$detalhe_cargo(NULL)
-    session$setInputs(base_grafico_agrupar = "Sexo", base_grafico_selected = "Masculino")
-    checar("Base > Gráfico: com outro agrupamento o clique não abre a janela", is.null(aba_base$detalhe_cargo()))
+           nrow(aba_base$detalhe()$tabela) == 2)
+
+    session$setInputs(base_status = "Todos", base_grafico_agrupar = "Status", base_grafico_selected = "Inativo")
+    d <- aba_base$detalhe()
+    checar("Base > Gráfico (Status): clicar na barra abre a janela do grupo",
+           identical(d$agrupar, "Status") && nrow(d$tabela) == 3)
+    checar("Base > Gráfico (Status): colunas CPF, Nome, Status, Cargo, Situação, Início e Saída",
+           identical(names(d$tabela), c("CPF", "Nome", "Status", "Cargo", "Situação Profissional",
+                                        "Data de Início da Situação", "Data de Saída da Situação")))
+    session$setInputs(base_grafico_selected = character(0))
+    session$setInputs(base_grafico_agrupar = "Situação profissional atual",
+                      base_grafico_selected = SITUACAO_PROFISSIONAL_MAGISTRADO[["12"]])
+    d <- aba_base$detalhe()
+    checar("Base > Gráfico (Situação): janela sem coluna repetida, com Data de Saída",
+           nrow(d$tabela) == 2 && identical(names(d$tabela), c("CPF", "Nome", "Cargo", "Situação Profissional",
+                                                                "Data de Início da Situação", "Data de Saída da Situação")))
+
     session$setInputs(secao = "envio", envio_grafico_agrupar = "Cargo", envio_grafico_selected = cargo_2)
-    checar("Envio > Gráfico: o clique não abre a janela (só na Base de Dados)", is.null(aba_envio$detalhe_cargo()))
+    checar("Envio > Gráfico: o clique não abre a janela (só na Base de Dados)", is.null(aba_envio$detalhe()))
 })
 invisible(file.remove(file.path(pasta_magistrados("MPRO"), "magistrados.csv")))
 
