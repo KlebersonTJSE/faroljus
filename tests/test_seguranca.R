@@ -1547,15 +1547,25 @@ cat("\n[16] Magistrados: clique na barra de Cargo abre os registros; paleta dos 
 mag_exib <- traduzir_codigos_magistrados(mag_base_ne)
 cargo_2 <- CARGO_MAGISTRADO[["2"]]
 det <- detalhe_cargo_magistrados(mag_exib, cargo_2)
-checar("Detalhe do cargo: colunas CPF, Nome, Cargo, Situação, Início e Saída, nessa ordem",
-       identical(names(det), c("CPF", "Nome", "Cargo", "Situação Profissional",
-                               "Data de Início da Situação", "Data de Saída da Situação")))
+checar("Detalhe do cargo: colunas CPF, Nome, Órgão, Cargo, Situação e Início, nessa ordem",
+       identical(names(det), c("CPF", "Nome", "Órgão de lotação do magistrado(a)", "Cargo",
+                               "Situação Profissional", "Data de Início da Situação")))
 checar("Detalhe do cargo: só os registros do cargo clicado (5 do cargo 2), ordenados por nome",
        nrow(det) == 5 && all(det$Cargo == cargo_2) && !is.unsorted(det$Nome))
 checar("Detalhe do cargo: situação por extenso e datas em dd/mm/aaaa",
        any(det$`Situação Profissional` == SITUACAO_PROFISSIONAL_MAGISTRADO[["12"]]) &&
-           all(grepl("^\\d{2}/\\d{2}/\\d{4}$", det$`Data de Início da Situação`)) &&
-           "01/06/2026" %in% det$`Data de Saída da Situação`)
+           all(grepl("^\\d{2}/\\d{2}/\\d{4}$", det$`Data de Início da Situação`)))
+det_dist <- detalhe_cargo_magistrados(mag_exib, cargo_2, cpfs_distintos = TRUE)
+checar("CPFs distintos: uma linha por CPF (JAIR tinha 2 registros no cargo 2)",
+       nrow(det_dist) == 4 && !anyDuplicated(det_dist$CPF))
+checar("CPFs distintos: fica a situação mais recente (JAIR: 18/01/2025, Aposentado(a))",
+       det_dist$`Data de Início da Situação`[det_dist$Nome == "JAIR"] == "18/01/2025" &&
+           det_dist$`Situação Profissional`[det_dist$Nome == "JAIR"] == SITUACAO_PROFISSIONAL_MAGISTRADO[["12"]])
+dz <- data.frame(CPF = c("1001715594", "01001715594", "", ""), Nome = c("A", "A", "B", "C"), Cargo = "X",
+                 `Data de início da situação` = c("01/01/2020", "", "01/01/2021", "01/01/2022"), check.names = FALSE)
+dz_d <- detalhe_cargo_magistrados(dz, "X", cpfs_distintos = TRUE)
+checar("CPFs distintos: CPF com e sem zero à esquerda é o mesmo; registro sem data não vence o datado; linhas sem CPF ficam",
+       nrow(dz_d) == 3 && dz_d$`Data de Início da Situação`[dz_d$Nome == "A"] == "01/01/2020")
 checar("Detalhe do cargo: data serial do Excel vira dd/mm/aaaa",
        identical(detalhe_cargo_magistrados(data.frame(Cargo = "X", `Data de início da situação` = "46279", check.names = FALSE), "X")$`Data de Início da Situação`,
                  format(as.Date(46279, origin = "1899-12-30"), "%d/%m/%Y")))
@@ -1572,6 +1582,11 @@ testServer(mod_magistrados_server, args = list(empresa = reactive("MPRO"), ativo
     d <- aba_base$detalhe_cargo()
     checar("Base > Gráfico (Cargo): clicar na barra abre a janela com os registros do cargo",
            !is.null(d) && identical(d$cargo, cargo_2) && nrow(d$tabela) == 5)
+    session$setInputs(base_detalhe_cargo_modo = "distintos")
+    checar("Janela: opção \"Apenas CPFs distintos\" mostra um registro por CPF",
+           nrow(aba_base$detalhe_cargo_tabela()) == 4)
+    session$setInputs(base_detalhe_cargo_modo = "todos")
+    checar("Janela: voltar para \"Todos os registros\" mostra todos", nrow(aba_base$detalhe_cargo_tabela()) == 5)
     session$setInputs(base_status = "Ativo")
     session$setInputs(base_grafico_selected = character(0))
     session$setInputs(base_grafico_selected = cargo_2)
@@ -1584,6 +1599,13 @@ testServer(mod_magistrados_server, args = list(empresa = reactive("MPRO"), ativo
     checar("Envio > Gráfico: o clique não abre a janela (só na Base de Dados)", is.null(aba_envio$detalhe_cargo()))
 })
 invisible(file.remove(file.path(pasta_magistrados("MPRO"), "magistrados.csv")))
+
+codigo_app <- paste(readLines(here::here("app.R"), warn = FALSE), collapse = "\n")
+checar("Todas as janelas: script coloca o X (data-bs-dismiss) quando a janela não tem um",
+       grepl("function adicionarX(modal)", codigo_app, fixed = TRUE) &&
+           grepl("querySelector('.btn-close')) return", codigo_app, fixed = TRUE) &&
+           grepl("setAttribute('data-bs-dismiss', 'modal')", codigo_app, fixed = TRUE))
+checar("Todas as janelas: o script está na página", grepl("adicionarX", paste(unlist(htmltools::renderTags(ui)[c("head", "html")]), collapse = ""), fixed = TRUE))
 
 checar("Paleta: as 5 cores definidas, na ordem", identical(unname(PALETA_GRAFICOS),
        c("#00B8D9", "#005B96", "#FF8C42", "#4A4A4A", "#4CAF50")))
