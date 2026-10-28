@@ -82,6 +82,14 @@ Em **Magistrados → Base de Dados → Gráfico**, clicar numa barra abre uma ja
 
 **Pessoal e Auxiliar → Gráfico** tem o mesmo comportamento, com o mesmo código (`servidor_grafico_agrupado()`). Na janela de Cargo, a coluna de órgão é a "Órgão de lotação do(a) servidor(a)".
 
+### 🏛️ Serventias: CSV a partir da Base de Dados
+
+Em **Serventias → Alertas** e **Serventias → Inconsistências**, a aba **Gerar arquivo CSV** tem, logo abaixo do botão **Gerar arquivo CSV**, o botão **Gerar CSV a partir da Base de Dados**. Ele gera um arquivo com a mesma estrutura da tabela da aba Base de Dados (todas as colunas, na mesma ordem, com os nomes no lugar dos códigos), apenas com as serventias que aparecem na tabela da aba:
+- a tabela considera os filtros e a busca aplicados;
+- a busca é pelo **Código Serventia**, com ou sem zeros à esquerda;
+- entram todos os registros da base com esses códigos; os filtros da aba Base de Dados não se aplicam;
+- uma mensagem informa quantos registros saíram e quais códigos da tabela não existem na base.
+
 ### 📊 Tipo de gráfico automático (toda a aplicação)
 
 O tipo de cada gráfico depende de quantos grupos ele mostra (depois do **Exibir**, quando houver). É sempre feito por `grafico_automatico_girafe()`/`grafico_automatico_gg()` e, no Painel, por `painel_grafico()`:

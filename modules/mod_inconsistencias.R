@@ -181,13 +181,20 @@ mod_inconsistencias_ui <- function(id, verificacoes, filtros_texto = character(0
 #   rotulo_entidade texto da contagem: "servidor(es)", "serventia(s)"...
 #   filtros_texto  rótulo -> coluna (os mesmos passados para a UI).
 #   prefixo_csv    início do nome do arquivo gerado.
+#   csv_extra      opcional: um segundo botão na aba "Gerar arquivo CSV",
+#                  logo abaixo do primeiro — list(ui = function(ns,
+#                  tabela), nome = function(), gravar = function(tabela,
+#                  file)); `tabela` são as linhas exibidas (filtros e
+#                  busca da tabela). Ex.: Serventias, "Gerar CSV a partir
+#                  da Base de Dados".
 mod_inconsistencias_server <- function(id, dados, verificacoes,
                                        mensagem_sem_base = reactive(NULL),
                                        avisos = reactive(NULL),
                                        col_entidade = "CPF",
                                        rotulo_entidade = "registro(s)",
                                        filtros_texto = character(0),
-                                       prefixo_csv = "inconsistencias") {
+                                       prefixo_csv = "inconsistencias",
+                                       csv_extra = NULL) {
   moduleServer(id, function(input, output, session) {
 
     ns <- session$ns
@@ -338,10 +345,31 @@ mod_inconsistencias_server <- function(id, dados, verificacoes,
 
     })
 
+    # Linhas exibidas na tabela (filtros e busca da própria tabela).
+    tabela_visivel <- function() {
+      df <- filtradas()
+      linhas <- input$tabela_rows_all
+      if (!is.null(df) && !is.null(linhas)) {
+        linhas <- linhas[linhas >= 1 & linhas <= nrow(df)]
+        df <- df[linhas, , drop = FALSE]
+      }
+      df
+    }
+
     output$csv_ui <- renderUI({
       df <- filtradas()
-      ui_csv_dados(ns, "download_csv", !is.null(df) && nrow(df) > 0)
+      tagList(
+        ui_csv_dados(ns, "download_csv", !is.null(df) && nrow(df) > 0),
+        if (!is.null(csv_extra)) csv_extra$ui(ns, df)
+      )
     })
+
+    if (!is.null(csv_extra)) {
+      output$download_csv_extra <- downloadHandler(
+        filename = function() csv_extra$nome(),
+        content = function(file) csv_extra$gravar(tabela_visivel(), file)
+      )
+    }
 
     output$download_csv <- downloadHandler(
 
@@ -360,6 +388,8 @@ mod_inconsistencias_server <- function(id, dados, verificacoes,
         )
       }
     )
+
+    list(tabela_visivel = tabela_visivel)
 
   })
 }
