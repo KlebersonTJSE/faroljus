@@ -80,20 +80,36 @@ Em **Magistrados → Base de Dados → Gráfico**, clicar numa barra abre uma ja
 - **Cargo**: CPF, Nome, Órgão de lotação do magistrado(a), Cargo, Situação Profissional, Data de Início e Data de Saída da Situação;
 - **demais opções**: CPF, Nome, Cargo, Situação Profissional, Data de Início e Data de Saída da Situação. A coluna agrupada (Órgão, Forma de promoção, Sexo, Raça / Cor, Naturalidade ou Status) entra logo depois do Nome.
 
-Os agrupamentos **Cargo, Sexo, Raça / Cor e Status** (e o gráfico por cargo da aba Alertas) aparecem em **pizza** (rosca):
-- o total fica no centro e o percentual dentro de cada fatia com 5% ou mais;
-- a legenda mostra categoria, quantidade e percentual, da maior para a menor;
-- acima de 8 categorias, as menores viram "Outros";
-- Sexo e Raça / Cor usam as mesmas cores do Painel; em Status, Ativo é verde e Inativo, grafite.
+**Pessoal e Auxiliar → Gráfico** tem o mesmo comportamento, com o mesmo código (`servidor_grafico_agrupado()`). Na janela de Cargo, a coluna de órgão é a "Órgão de lotação do(a) servidor(a)".
 
-Os demais agrupamentos continuam em barras.
+### 📊 Tipo de gráfico automático (toda a aplicação)
 
-**Pessoal e Auxiliar → Gráfico** segue as mesmas regras, com o mesmo código (`servidor_grafico_agrupado()`):
-- a janela ao clicar numa barra ou fatia da Base de Dados, com Apenas CPFs distintos e o Gerar arquivo CSV;
-- pizza em Cargo, **Área de atuação**, Sexo, Raça / Cor e Status, além do gráfico por cargo da aba Alertas;
-- as mesmas cores fixas.
+O tipo de cada gráfico depende de quantos grupos ele mostra (depois do **Exibir**, quando houver). É sempre feito por `grafico_automatico_girafe()`/`grafico_automatico_gg()` e, no Painel, por `painel_grafico()`:
 
-Na janela de Cargo, a coluna de órgão é a "Órgão de lotação do(a) servidor(a)".
+| Grupos | Tipo |
+|---|---|
+| até 6 | **pizza** (rosca), com o total no centro, o percentual nas fatias de 5% ou mais e a legenda com categoria, quantidade e percentual |
+| 7 a 8 | **barras verticais**, com quantidade e percentual acima de cada barra |
+| 9 ou mais | **barras horizontais**, com quantidade e percentual no fim de cada barra; a altura cresce com o número de grupos |
+
+Isso vale para todos os gráficos de uma dimensão:
+- abas Base de Dados e Envio de Magistrados, Pessoal e Auxiliar e Serventias;
+- gráficos por tipo de alerta e por cargo/status das abas Alertas;
+- gráficos de usuário, empresa e método da Administração;
+- Sexo, Identidade de gênero, Raça/cor e Cargo no Painel.
+
+Exceções:
+- Município abrangido e Competência (Serventias) e Tipo de deficiência (Painel) nunca viram pizza. Neles uma serventia ou pessoa pode estar em mais de um grupo, e as fatias não somariam o todo.
+- A pirâmide etária, os comparativos do Painel e o gráfico de sucesso x falha por período da Administração têm duas dimensões e mantêm o formato.
+
+As **cores** são as mesmas em pizza e barras:
+- Sexo e Raça/Cor iguais às do Painel;
+- em Status, Ativo é verde e Inativo, grafite;
+- os cargos mais comuns têm cor fixa (as mesmas no Painel);
+- "(Não informado)" fica em cinza;
+- as demais categorias seguem a paleta na ordem do maior para o menor grupo. Depois das 5 cores vêm tons mais claros e mais escuros delas; a partir da 16ª categoria, as cores se repetem.
+
+O percentual é sobre o total de registros, mesmo quando o Exibir mostra só parte dos grupos. **Agrupar por** e **Exibir** ficam sempre lado a lado.
 
 A opção **Mostrar → Apenas CPFs distintos** deixa uma linha por CPF, com a situação mais recente de cada magistrado. O botão **Gerar arquivo CSV** da janela exporta exatamente o que a tabela mostra: a opção escolhida, a busca e os filtros das colunas.
 
@@ -125,7 +141,7 @@ Ao fechar a janela, a chave recém-gerada e os campos do formulário são limpos
 |---|---|
 | Aplicação web | `shiny`, `bslib`, `here` |
 | Dados | `readr`, `dplyr`, `purrr`, `stringr`, `stringi` |
-| Tabelas e gráficos | `DT`, `echarts4r`, `ggplot2`, `ggiraph` |
+| Tabelas e gráficos | `DT`, `ggplot2`, `ggiraph` |
 | Banco local (acessos e auditoria) | `DBI`, `RSQLite` |
 | Banco IRIS (InterSystems) | `RJDBC`, `rJava`, driver JDBC do IRIS |
 | Login AD | `reticulate` + Python com `ldap3` |
@@ -238,7 +254,7 @@ git clone https://github.com/KlebersonTJSE/FarolJus.git
 ```r
 install.packages(c(
   "shiny", "bslib", "here", "readr", "dplyr", "purrr", "stringr",
-  "stringi", "DT", "echarts4r", "ggplot2", "ggiraph", "DBI",
+  "stringi", "DT", "ggplot2", "ggiraph", "DBI",
   "RSQLite", "RJDBC", "rJava", "reticulate", "digest", "jsonlite",
   "openssl", "readxl", "qrcode"
 ))

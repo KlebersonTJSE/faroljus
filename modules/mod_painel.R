@@ -642,7 +642,10 @@ painel_rosca <- function(resumo, cores, rotulo_centro = "pessoas") {
         return(NULL)
     }
 
-    fim <- cumsum(resumo$pct)
+    # Fatias pela participação de cada categoria na soma (o percentual
+    # da legenda é o do resumo).
+    parte <- if (sum(resumo$n) > 0) 100 * resumo$n / sum(resumo$n) else rep(0, nrow(resumo))
+    fim <- cumsum(parte)
     ini <- c(0, head(fim, -1))
 
     gradiente <- paste(
@@ -670,10 +673,65 @@ painel_rosca <- function(resumo, cores, rotulo_centro = "pessoas") {
                     class = "pn-legenda-item",
                     tags$span(class = "pn-legenda-cor", style = paste0("background:", cores[[resumo$categoria[i]]], ";")),
                     tags$span(resumo$categoria[i]),
-                    tags$b(class = "ms-auto", fmt_pct(resumo$pct[i]))
+                    tags$b(class = "ms-auto", fmt_pct(resumo$pct[i])),
+                    tags$span(class = "pn-barra-n", fmt_int(resumo$n[i]))
                 )
             })
         )
+    )
+
+}
+
+# Barras verticais (7 a 8 categorias): percentual e quantidade acima da
+# barra, nome embaixo; a maior à esquerda.
+painel_colunas <- function(resumo, cores, rotulo_pct = "do total") {
+
+    if (nrow(resumo) == 0) {
+        return(div(class = "pn-vazio", "Sem dados para exibir."))
+    }
+
+    maior <- max(resumo$n)
+
+    div(
+        class = "pn-colunas",
+        role = "list",
+        lapply(seq_len(nrow(resumo)), function(i) {
+            altura <- if (maior > 0) 100 * resumo$n[i] / maior else 0
+            div(
+                class = "pn-coluna",
+                role = "listitem",
+                title = sprintf("%s: %s (%s %s)", resumo$categoria[i], fmt_int(resumo$n[i]), fmt_pct(resumo$pct[i]), rotulo_pct),
+                div(
+                    class = "pn-coluna-area",
+                    div(class = "pn-coluna-valor", tags$b(fmt_pct(resumo$pct[i])), tags$span(class = "pn-barra-n", fmt_int(resumo$n[i]))),
+                    div(
+                        class = "pn-coluna-barra",
+                        style = sprintf("height:%.2f%%;background:%s;", max(altura, 1), cores[[resumo$categoria[i]]])
+                    )
+                ),
+                div(class = "pn-coluna-rotulo", resumo$categoria[i])
+            )
+        })
+    )
+
+}
+
+# Tipo do gráfico pela quantidade de categorias, como no resto da
+# aplicação (tipo_grafico_automatico()): rosca até 6, barras verticais
+# de 7 a 8 e horizontais de 9 em diante. `permite_pizza = FALSE` quando
+# uma pessoa pode estar em mais de uma categoria (as fatias não somariam
+# o todo) — fica em barras.
+painel_grafico <- function(resumo, cores, rotulo_pct = "do total", rotulo_centro = "pessoas",
+                           permite_pizza = TRUE) {
+
+    tipo <- tipo_grafico_automatico(nrow(resumo))
+    if (!permite_pizza && tipo == "pizza") tipo <- "barras"
+
+    switch(
+        tipo,
+        pizza = painel_rosca(resumo, cores, rotulo_centro),
+        colunas = painel_colunas(resumo, cores, rotulo_pct),
+        painel_barras(resumo, cores, rotulo_pct)
     )
 
 }
@@ -974,10 +1032,17 @@ CSS_PAINEL <- "
 #ID .pn-rosca-total { font-size:1.4rem; font-weight:700; }
 #ID .pn-rosca-sub { font-size:.75rem; color:#6c757d; }
 
-#ID .pn-legenda { display:flex; flex-direction:column; gap:.35rem; flex:1; min-width:180px; font-size:.85rem; }
+#ID .pn-legenda { display:flex; flex-direction:column; gap:.35rem; flex:1; min-width:180px; max-width:440px; font-size:.85rem; }
 #ID .pn-legenda-linha { flex-direction:row; flex-wrap:wrap; gap:.4rem 1rem; margin-top:.6rem; font-size:.8rem; }
 #ID .pn-legenda-item { display:flex; align-items:center; gap:.45rem; }
 #ID .pn-legenda-cor { width:12px; height:12px; border-radius:3px; flex-shrink:0; }
+#ID .pn-colunas { display:flex; gap:.6rem; align-items:stretch; padding-top:.25rem; }
+#ID .pn-coluna { flex:1 1 0; min-width:0; display:flex; flex-direction:column; }
+#ID .pn-coluna-area { height:190px; display:flex; flex-direction:column; justify-content:flex-end; align-items:stretch; border-bottom:1px solid #dee2e6; }
+#ID .pn-coluna-valor { text-align:center; font-size:.8rem; line-height:1.15; margin-bottom:.25rem; font-variant-numeric:tabular-nums; }
+#ID .pn-coluna-valor .pn-barra-n { display:block; margin-left:0; }
+#ID .pn-coluna-barra { border-radius:4px 4px 0 0; min-height:2px; }
+#ID .pn-coluna-rotulo { text-align:center; font-size:.78rem; color:#343a40; line-height:1.2; margin-top:.4rem; overflow-wrap:anywhere; }
 
 #ID .pn-comparativo { margin-top:1.25rem; padding-top:.25rem; border-top:1px dashed #e3e7ec; }
 #ID .pn-comp-linha { display:grid; grid-template-columns:150px 1fr; gap:.75rem; align-items:center; margin-bottom:.5rem; }
@@ -1250,8 +1315,11 @@ mod_painel_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NUL
                 c("Com deficiência" = PALETA_GRAFICOS[["laranja"]], "Sem deficiência" = PALETA_GRAFICOS[["azul"]])
             )
             cores_tipos <- cores_painel(TIPOS_DEFICIENCIA_PAINEL)
-            cores_cargo <- cores_painel(unique(c(r_cargo$categoria, todos$cargo[!is.na(todos$cargo)])))
-            cor_unica <- function(cats, cor) stats::setNames(rep(cor, length(cats)), cats)
+            # Mesmas cores de cargo dos gráficos de Magistrados e de Pessoal e Auxiliar.
+            cores_cargo <- cores_painel(
+                unique(c(r_cargo$categoria, todos$cargo[!is.na(todos$cargo)])),
+                c(cores_fixas_magistrados("Cargo"), cores_fixas_pessoal("Cargo"))
+            )
 
             comparar <- publico_atual() == PAINEL_TODOS && n_mag > 0 && n_srv > 0
 
@@ -1357,7 +1425,7 @@ mod_painel_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NUL
                     painel_aviso_coluna(colunas, "sexo", "Sexo", pubs),
                     div(
                         class = "pn-grade",
-                        painel_rosca(r_sexo, cores_sexo),
+                        painel_grafico(r_sexo, cores_sexo),
                         painel_cartoes(r_sexo, cores_sexo)
                     ),
                     if (comparar) painel_comparativo(p, "sexo", cores_sexo)
@@ -1371,7 +1439,7 @@ mod_painel_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NUL
                     div(
                         class = "pn-grade",
                         painel_cartoes(r_genero, cores_genero),
-                        painel_barras(r_genero, cores_genero)
+                        painel_grafico(r_genero, cores_genero)
                     ),
                     if (comparar) painel_comparativo(p, "genero", cores_genero)
                 ),
@@ -1384,7 +1452,7 @@ mod_painel_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NUL
                     painel_cartoes(r_raca, cores_raca),
                     div(
                         class = "pn-grade mt-3",
-                        painel_barras(r_raca, cores_raca),
+                        painel_grafico(r_raca, cores_raca),
                         div(
                             class = "pn-numeros",
                             style = "margin-top:0;",
@@ -1409,7 +1477,7 @@ mod_painel_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NUL
                         ),
                         div(
                             div(class = "pn-subtitulo", style = "margin-top:0;", "Tipo de deficiência (entre as pessoas com deficiência)"),
-                            if (nrow(r_tipos) > 0) painel_barras(r_tipos, cores_tipos, "das pessoas com deficiência")
+                            if (nrow(r_tipos) > 0) painel_grafico(r_tipos, cores_tipos, "das pessoas com deficiência", permite_pizza = FALSE)
                             else div(class = "pn-vazio", "Nenhuma pessoa com deficiência nos filtros selecionados.")
                         )
                     ),
@@ -1428,19 +1496,19 @@ mod_painel_server <- function(id, ativo = reactive(TRUE), empresa = reactive(NUL
                                 div(class = "pn-subtitulo", style = "margin-top:0;", "Magistrados"),
                                 {
                                     r <- resumo_painel(p$cargo[p$publico == PAINEL_MAGISTRADOS])
-                                    painel_barras(r, cor_unica(r$categoria, PAINEL_COR_PUBLICO[["Magistrados"]]), "dos magistrados")
+                                    painel_grafico(r, cores_cargo, "dos magistrados", "magistrados")
                                 }
                             ),
                             div(
                                 div(class = "pn-subtitulo", style = "margin-top:0;", "Servidores"),
                                 {
                                     r <- resumo_painel(p$cargo[p$publico == PAINEL_SERVIDORES])
-                                    painel_barras(r, cor_unica(r$categoria, PAINEL_COR_PUBLICO[["Servidores"]]), "dos servidores")
+                                    painel_grafico(r, cores_cargo, "dos servidores", "servidores")
                                 }
                             )
                         )
                     } else {
-                        painel_barras(r_cargo, cores_cargo)
+                        painel_grafico(r_cargo, cores_cargo)
                     }
                 )
             )

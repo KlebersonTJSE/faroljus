@@ -49,7 +49,6 @@ library(purrr)
 library(stringr)
 library(ggplot2)
 library(DT)
-library(echarts4r)
 library(ggiraph)
 library(readxl)   # leitura direta de .xlsx
 
@@ -667,77 +666,55 @@ tabela_dt <- function(df, ...) {
 }
 
 # =====================================================
-# GRÁFICO DE BARRAS HORIZONTAIS (ggiraph)
+# GRÁFICOS AUTOMÁTICOS (ggiraph) — usados em toda a aplicação
 # -----------------------------------------------------
-# `resumo` precisa das colunas Grupo, Quantidade e dica (tooltip HTML),
-# já na ordem desejada (maior primeiro) — a maior barra fica no topo.
+# O TIPO do gráfico depende da quantidade de grupos exibidos (depois do
+# "Exibir", quando houver):
+#   - até 6 grupos ......... PIZZA (rosca)       — proporção do todo;
+#   - de 7 a 8 grupos ...... BARRAS VERTICAIS    — poucos grupos, fácil
+#                                                   comparar alturas;
+#   - 9 grupos ou mais ..... BARRAS HORIZONTAIS  — nomes longos cabem
+#                                                   na lateral.
+# As CORES são as mesmas nos três tipos (cores_categorias()): cores fixas
+# por categoria quando houver (Sexo e Raça/Cor iguais às do Painel;
+# Status Ativo verde e Inativo grafite; cargos mais comuns), cinza para
+# "(Não informado)" e "Outros", e o resto da paleta (R/utils.R) na ordem
+# do maior para o menor grupo — com tons mais claros e depois mais
+# escuros das mesmas cores a partir da 6ª categoria (15 cores; a partir
+# daí elas se repetem).
+#
+# Legibilidade:
+#   - rosca com o total no centro, percentual dentro das fatias com 5%
+#     ou mais e legenda "categoria — quantidade (percentual)", na ordem
+#     das fatias (maior primeiro, sentido horário a partir do topo);
+#   - barras com o valor e o percentual ao lado/acima de cada barra,
+#     nomes quebrados em linhas e a maior barra primeiro (no topo ou à
+#     esquerda);
+#   - dica (tooltip) com os detalhes; texto sobre a cor em branco ou
+#     grafite, conforme o contraste.
+# `resumo`: Grupo, Quantidade e dica (tooltip HTML); opcional Rotulo
+# (texto exibido, ex.: "CEP 49000-000", quando diferente do Grupo).
+# `selecionavel = TRUE`: clicar numa fatia/barra envia o Grupo para
+# input$<id do gráfico>_selected.
 # =====================================================
 
-# `selecionavel = TRUE`: clicar numa barra envia o Grupo dela para
-# input$<id do gráfico>_selected (ggiraph), usado para abrir o detalhe.
-grafico_barras_girafe <- function(resumo, titulo, subtitulo = NULL, selecionavel = FALSE) {
-
-  resumo <- resumo %>%
-    mutate(
-      Grupo = as.character(Grupo),
-      rotulo = str_wrap(Grupo, 45)
-    )
-
-  # Com coord_flip(), o primeiro nível fica embaixo: inverte a ordem.
-  resumo$rotulo <- factor(resumo$rotulo, levels = rev(unique(resumo$rotulo)))
-
-  p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
-    geom_col_interactive(
-      aes(tooltip = dica, data_id = Grupo),
-      fill = COR_GRAFICO
-    ) +
-    geom_text(aes(label = Quantidade), hjust = -0.2, size = 3.2) +
-    coord_flip() +
-    scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
-    labs(title = titulo, subtitle = subtitulo, x = "", y = "Quantidade") +
-    theme_minimal()
-
-  girafe(
-    ggobj = p,
-    width_svg = 9,
-    height_svg = max(3, 0.32 * nrow(resumo) + 1.6),
-    options = list(
-      opts_hover(css = CSS_HOVER_GRAFICO),
-      opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
-      opts_sizing(rescale = TRUE, width = 1),
-      if (selecionavel) {
-        opts_selection(type = "single", css = CSS_HOVER_GRAFICO, only_shiny = TRUE)
-      } else {
-        opts_selection(type = "none")
-      }
-    )
-  )
-
-}
-
-# =====================================================
-# GRÁFICO DE PIZZA (rosca, ggiraph)
-# -----------------------------------------------------
-# Para agrupamentos com poucas categorias (Cargo, Sexo, Raça/Cor,
-# Status), onde o que importa é a proporção do todo. Para ficar legível:
-#   - rosca com o total no centro;
-#   - percentual dentro da fatia (só nas fatias com 5% ou mais — nas
-#     menores o número fica na legenda e na dica);
-#   - legenda ao lado com "categoria — quantidade (percentual)", na
-#     mesma ordem das fatias (maior primeiro, no sentido horário a
-#     partir do topo);
-#   - no máximo `max_fatias` fatias: o resto vira "Outros" (não clicável);
-#   - cores da paleta (R/utils.R); `cores_fixas` (nome = categoria)
-#     para manter a mesma cor da mesma categoria em toda a aplicação
-#     (ex.: Sexo e Raça/Cor iguais às do Painel); "(Não informado)" em
-#     cinza; texto da fatia branco ou grafite, conforme o fundo.
-# `resumo` precisa de Grupo, Quantidade e dica (tooltip HTML).
-# `selecionavel = TRUE`: clicar numa fatia envia o Grupo para
-# input$<id do gráfico>_selected, como no gráfico de barras.
-# =====================================================
+LIMITE_GRUPOS_PIZZA <- 6
+LIMITE_GRUPOS_COLUNAS <- 8
 
 ID_FATIA_OUTROS <- "__outros__"
 LIMITE_ROTULO_FATIA <- 5
+
+tipo_grafico_automatico <- function(n_grupos) {
+  if (n_grupos <= LIMITE_GRUPOS_PIZZA) {
+    "pizza"
+  } else if (n_grupos <= LIMITE_GRUPOS_COLUNAS) {
+    "colunas"
+  } else {
+    "barras"
+  }
+}
+
+ROTULO_TIPO_GRAFICO <- c(pizza = "fatia", colunas = "barra", barras = "barra")
 
 # Branco ou grafite, o que tiver mais contraste com o fundo `cor`.
 cor_texto_sobre <- function(cor) {
@@ -749,81 +726,125 @@ cor_texto_sobre <- function(cor) {
   ifelse(contraste_branco >= contraste_grafite, "#FFFFFF", PALETA_GRAFICOS[["grafite"]])
 }
 
-# Prepara as fatias: ordem, "Outros", percentuais, cores e legenda.
-fatias_pizza <- function(resumo, cores_fixas = NULL, max_fatias = 8) {
-
-  d <- resumo %>%
-    mutate(Grupo = as.character(Grupo), id = Grupo) %>%
-    arrange(desc(Quantidade), Grupo)
-
-  if (nrow(d) > max_fatias) {
-    resto <- d[max_fatias:nrow(d), , drop = FALSE]
-    outros <- tibble(
-      Grupo = sprintf("Outros (%d)", nrow(resto)),
-      Quantidade = sum(resto$Quantidade),
-      dica = sprintf(
-        "<b>Outros</b><br/>%s registro(s) em %d grupo(s):<br/>%s",
-        format(sum(resto$Quantidade), big.mark = ".", decimal.mark = ","),
-        nrow(resto),
-        paste(htmltools::htmlEscape(head(resto$Grupo, 10)), collapse = "<br/>")
-      ),
-      id = ID_FATIA_OUTROS
-    )
-    d <- bind_rows(d[seq_len(max_fatias - 1), c("Grupo", "Quantidade", "dica", "id")], outros)
-  }
-
-  total <- sum(d$Quantidade)
-  d$pct <- if (total > 0) 100 * d$Quantidade / total else 0
-  pct_txt <- paste0(sub(".", ",", sprintf("%.1f", d$pct), fixed = TRUE), "%")
-  qtd_txt <- format(d$Quantidade, big.mark = ".", decimal.mark = ",", trim = TRUE)
-
-  # Cores: fixas, cinza para "não informado"/"Outros", e o resto da
-  # paleta na ordem, sem repetir as fixas já usadas.
-  cor <- rep(NA_character_, nrow(d))
-  if (!is.null(cores_fixas)) {
-    chave_fixa <- normalizar_nome_coluna(names(cores_fixas))
-    pos <- match(normalizar_nome_coluna(d$Grupo), chave_fixa)
+# Cor de cada categoria (`grupos`, na ordem do maior para o menor):
+# fixas, cinza para "não informado"/"Outros" e o resto da paleta, sem
+# repetir as fixas já usadas.
+cores_categorias <- function(grupos, ids = grupos, cores_fixas = NULL) {
+  cor <- rep(NA_character_, length(grupos))
+  if (!is.null(cores_fixas) && length(cores_fixas) > 0) {
+    pos <- match(normalizar_nome_coluna(grupos), normalizar_nome_coluna(names(cores_fixas)))
     cor[!is.na(pos)] <- unname(cores_fixas[pos[!is.na(pos)]])
   }
-  cinza <- d$Grupo == ROTULO_VALOR_VAZIO | d$id == ID_FATIA_OUTROS
+  cinza <- grupos == ROTULO_VALOR_VAZIO | ids == ID_FATIA_OUTROS
   cor[cinza & is.na(cor)] <- COR_GRAFICO_SEM_INFO
   livres <- setdiff(paleta_graficos(15), cor)
   faltam <- which(is.na(cor))
   cor[faltam] <- rep_len(livres, length(faltam))
+  cor
+}
 
-  d %>%
-    mutate(
-      cor = cor,
-      cor_texto = cor_texto_sobre(cor),
-      rotulo_fatia = ifelse(pct >= LIMITE_ROTULO_FATIA, pct_txt, ""),
-      legenda = str_wrap(sprintf("%s — %s (%s)", Grupo, qtd_txt, pct_txt), 46),
-      dica = paste0(dica, "<br/>", pct_txt, " do total"),
-      legenda = factor(legenda, levels = legenda)
+fmt_qtd_grafico <- function(x) format(x, big.mark = ".", decimal.mark = ",", trim = TRUE)
+fmt_pct_grafico <- function(x) paste0(sub(".", ",", sprintf("%.1f", x), fixed = TRUE), "%")
+
+# Prepara os grupos: ordem, "Outros" (só se passar de `max_grupos`),
+# percentuais (sobre `total_geral`, quando o "Exibir" mostra só parte
+# dos grupos), cores e textos.
+preparar_grupos_grafico <- function(resumo, cores_fixas = NULL, max_grupos = Inf, total_geral = NULL) {
+
+  d <- resumo %>%
+    mutate(Grupo = as.character(Grupo), id = Grupo)
+  if (!"Rotulo" %in% names(d)) d$Rotulo <- d$Grupo
+  if (!"dica" %in% names(d)) d$dica <- htmltools::htmlEscape(d$Rotulo)
+  d <- d %>% arrange(desc(Quantidade), Grupo)
+
+  if (nrow(d) > max_grupos) {
+    resto <- d[max_grupos:nrow(d), , drop = FALSE]
+    outros <- tibble(
+      Grupo = sprintf("Outros (%d)", nrow(resto)),
+      Rotulo = sprintf("Outros (%d)", nrow(resto)),
+      Quantidade = sum(resto$Quantidade),
+      dica = sprintf(
+        "<b>Outros</b><br/>%s registro(s) em %d grupo(s):<br/>%s",
+        fmt_qtd_grafico(sum(resto$Quantidade)), nrow(resto),
+        paste(htmltools::htmlEscape(head(resto$Rotulo, 10)), collapse = "<br/>")
+      ),
+      id = ID_FATIA_OUTROS
     )
+    d <- bind_rows(d[seq_len(max_grupos - 1), c("Grupo", "Rotulo", "Quantidade", "dica", "id")], outros)
+  }
+
+  total <- if (is.null(total_geral)) sum(d$Quantidade) else total_geral
+  d$pct <- if (total > 0) 100 * d$Quantidade / total else 0
+  d$qtd_txt <- fmt_qtd_grafico(d$Quantidade)
+  d$pct_txt <- fmt_pct_grafico(d$pct)
+  d$cor <- cores_categorias(d$Rotulo, d$id, cores_fixas)
+  d$cor_texto <- cor_texto_sobre(d$cor)
+  d$dica <- paste0(d$dica, "<br/>", d$pct_txt, " do total")
+  d
 
 }
 
-grafico_pizza_girafe <- function(resumo, titulo, subtitulo = NULL, selecionavel = FALSE,
-                                 cores_fixas = NULL, max_fatias = 8) {
+# Fatias da pizza (mantido para quem já usa — testes e chamadas antigas).
+fatias_pizza <- function(resumo, cores_fixas = NULL, max_fatias = 8) {
+  preparar_grupos_grafico(resumo, cores_fixas, max_fatias) %>%
+    mutate(
+      rotulo_fatia = ifelse(pct >= LIMITE_ROTULO_FATIA, pct_txt, ""),
+      legenda = str_wrap(sprintf("%s — %s (%s)", Rotulo, qtd_txt, pct_txt), 46),
+      legenda = factor(legenda, levels = unique(legenda))
+    )
+}
 
-  d <- fatias_pizza(resumo, cores_fixas, max_fatias)
+# Coluna/texto interativos (ggiraph) ou comuns (gráficos estáticos, ex.:
+# Administração). Sem interatividade, tooltip/data_id saem do mapeamento.
+geom_col_grafico <- function(interativo, mapping, ...) {
+  if (interativo) return(geom_col_interactive(mapping, ...))
+  mapping$tooltip <- NULL
+  mapping$data_id <- NULL
+  geom_col(mapping, ...)
+}
+
+geom_text_grafico <- function(interativo, mapping, ...) {
+  if (interativo) return(geom_text_interactive(mapping, ...))
+  mapping$tooltip <- NULL
+  mapping$data_id <- NULL
+  geom_text(mapping, ...)
+}
+
+tema_grafico <- function() {
+  theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 14, color = "#212529", margin = margin(b = 4)),
+      plot.subtitle = element_text(color = "#6c757d", size = 10.5, margin = margin(b = 8)),
+      plot.title.position = "plot",
+      plot.margin = margin(8, 12, 8, 8),
+      legend.position = "none"
+    )
+}
+
+grafico_pizza_gg <- function(d, titulo, subtitulo, interativo = TRUE, legenda = "right") {
+
+  d <- d %>%
+    mutate(
+      rotulo_fatia = ifelse(pct >= LIMITE_ROTULO_FATIA, pct_txt, ""),
+      legenda = str_wrap(sprintf("%s — %s (%s)", Rotulo, qtd_txt, pct_txt), if (legenda == "right") 46 else 60),
+      legenda = factor(legenda, levels = unique(legenda))
+    )
   total <- sum(d$Quantidade)
 
   # Com direction = -1 e o empilhamento na ordem da legenda, a maior
   # fatia começa no topo e as demais seguem no sentido horário.
-  p <- ggplot(d, aes(x = 2, y = Quantidade, group = legenda)) +
-    geom_col_interactive(
-      aes(fill = legenda, tooltip = dica, data_id = id),
+  ggplot(d, aes(x = 2, y = Quantidade, group = legenda)) +
+    geom_col_grafico(
+      interativo, aes(fill = legenda, tooltip = dica, data_id = id),
       width = 1, color = "white", linewidth = 0.9
     ) +
-    geom_text_interactive(
-      aes(label = rotulo_fatia, color = cor_texto, tooltip = dica, data_id = id),
-      position = position_stack(vjust = 0.5),
-      size = 4.2, fontface = "bold"
+    geom_text_grafico(
+      interativo, aes(label = rotulo_fatia, color = cor_texto, tooltip = dica, data_id = id),
+      position = position_stack(vjust = 0.5), size = 4.2, fontface = "bold"
     ) +
     annotate(
       "text", x = 0.5, y = 0,
-      label = sprintf("%s\n%s", format(total, big.mark = ".", decimal.mark = ","), if (total == 1) "registro" else "registros"),
+      label = sprintf("%s\n%s", fmt_qtd_grafico(total), if (total == 1) "registro" else "registros"),
       size = 5.2, fontface = "bold", color = PALETA_GRAFICOS[["grafite"]], lineheight = 0.95
     ) +
     coord_polar(theta = "y", direction = -1) +
@@ -833,23 +854,129 @@ grafico_pizza_girafe <- function(resumo, titulo, subtitulo = NULL, selecionavel 
     labs(title = titulo, subtitle = subtitulo) +
     theme_void(base_size = 12) +
     theme(
-      plot.title = element_text(face = "bold", size = 14, margin = margin(b = 4)),
+      plot.title = element_text(face = "bold", size = 14, color = "#212529", margin = margin(b = 4)),
       plot.subtitle = element_text(color = "#6c757d", size = 10.5, margin = margin(b = 6)),
-      legend.position = "right",
+      plot.title.position = "plot",
+      legend.position = legenda,
       legend.text = element_text(size = 11.5, color = "#212529", margin = margin(l = 4)),
       legend.key.size = grid::unit(0.95, "lines"),
       legend.spacing.y = grid::unit(0.35, "lines"),
       plot.margin = margin(8, 8, 8, 8)
     ) +
-    guides(fill = guide_legend(byrow = TRUE))
+    guides(fill = guide_legend(byrow = TRUE, ncol = 1))
+
+}
+
+# Barras verticais (7 a 8 grupos): maior à esquerda; valor e percentual
+# acima da barra; nome embaixo, quebrado em linhas.
+grafico_colunas_gg <- function(d, titulo, subtitulo, interativo = TRUE) {
+
+  d$eixo <- factor(str_wrap(d$Rotulo, 16), levels = unique(str_wrap(d$Rotulo, 16)))
+  d$valor_txt <- sprintf("%s\n(%s)", d$qtd_txt, d$pct_txt)
+
+  ggplot(d, aes(x = eixo, y = Quantidade)) +
+    geom_col_grafico(interativo, aes(fill = cor, tooltip = dica, data_id = id), width = 0.68) +
+    geom_text_grafico(
+      interativo, aes(label = valor_txt, tooltip = dica, data_id = id),
+      vjust = -0.25, size = 3.5, lineheight = 0.9, color = "#212529"
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.2)), labels = fmt_qtd_grafico) +
+    scale_fill_identity() +
+    labs(title = titulo, subtitle = subtitulo, x = NULL, y = NULL) +
+    tema_grafico() +
+    theme(
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.y = element_line(color = "#eceff3"),
+      axis.text.x = element_text(size = 10, color = "#212529", lineheight = 0.95),
+      axis.text.y = element_text(size = 9, color = "#6c757d")
+    )
+
+}
+
+# Barras horizontais (9 grupos ou mais): maior no topo; valor e
+# percentual no fim da barra; nome à esquerda, quebrado em linhas.
+grafico_barras_h_gg <- function(d, titulo, subtitulo, interativo = TRUE) {
+
+  rotulos <- str_wrap(d$Rotulo, 45)
+  d$eixo <- factor(rotulos, levels = rev(unique(rotulos)))
+  d$valor_txt <- sprintf("%s (%s)", d$qtd_txt, d$pct_txt)
+
+  ggplot(d, aes(x = eixo, y = Quantidade)) +
+    geom_col_grafico(interativo, aes(fill = cor, tooltip = dica, data_id = id), width = 0.72) +
+    geom_text_grafico(
+      interativo, aes(label = valor_txt, tooltip = dica, data_id = id),
+      hjust = -0.08, size = 3.4, color = "#212529"
+    ) +
+    coord_flip() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.24)), labels = fmt_qtd_grafico) +
+    scale_fill_identity() +
+    labs(title = titulo, subtitle = subtitulo, x = NULL, y = NULL) +
+    tema_grafico() +
+    theme(
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_line(color = "#eceff3"),
+      axis.text.y = element_text(size = 10, color = "#212529", lineheight = 0.95),
+      axis.text.x = element_text(size = 9, color = "#6c757d")
+    )
+
+}
+
+# Monta o gráfico do tipo certo. Devolve list(grafico (ggplot), tipo,
+# largura, altura) — em polegadas, para o girafe() ou o renderPlot().
+# `subtitulo`: texto base; o aviso de clique é acrescentado aqui
+# ("clique numa fatia/barra..."), conforme o tipo.
+grafico_automatico_gg <- function(resumo, titulo, subtitulo = NULL, cores_fixas = NULL,
+                                  total_geral = NULL, interativo = TRUE, clicavel = FALSE,
+                                  legenda = "right", largura = 9, permite_pizza = TRUE) {
+
+  n <- nrow(resumo)
+  tipo <- tipo_grafico_automatico(n)
+  # Agrupamento em que um registro entra em mais de um grupo (ex.:
+  # municípios abrangidos de uma serventia): as fatias não somam o todo,
+  # então a pizza enganaria — fica em barras verticais.
+  if (!permite_pizza && tipo == "pizza") tipo <- "colunas"
+  d <- preparar_grupos_grafico(resumo, cores_fixas, total_geral = total_geral)
+
+  if (clicavel) {
+    aviso <- sprintf("clique numa %s para ver os registros", ROTULO_TIPO_GRAFICO[[tipo]])
+    subtitulo <- if (is.null(subtitulo) || subtitulo == "") aviso else paste(subtitulo, aviso, sep = " · ")
+  }
+
+  if (tipo == "pizza") {
+    g <- grafico_pizza_gg(d, titulo, subtitulo, interativo, legenda)
+    linhas_legenda <- sum(str_count(str_wrap(sprintf("%s — %s (%s)", d$Rotulo, d$qtd_txt, d$pct_txt), 46), "\n") + 1)
+    altura <- if (legenda == "right") max(4.6, 0.3 * linhas_legenda + 1.6) else 6.4
+  } else if (tipo == "colunas") {
+    g <- grafico_colunas_gg(d, titulo, subtitulo, interativo)
+    linhas <- max(str_count(str_wrap(d$Rotulo, 16), "\n") + 1)
+    altura <- 4.4 + 0.2 * linhas
+  } else {
+    g <- grafico_barras_h_gg(d, titulo, subtitulo, interativo)
+    linhas <- sum(str_count(str_wrap(d$Rotulo, 45), "\n") + 1)
+    altura <- max(3.4, 0.3 * max(n, linhas) + 1.5)
+  }
+
+  list(grafico = g, tipo = tipo, largura = largura, altura = altura)
+
+}
+
+grafico_automatico_girafe <- function(resumo, titulo, subtitulo = NULL, selecionavel = FALSE,
+                                      cores_fixas = NULL, total_geral = NULL, permite_pizza = TRUE) {
+
+  g <- grafico_automatico_gg(
+    resumo, titulo, subtitulo, cores_fixas, total_geral,
+    interativo = TRUE, clicavel = selecionavel, permite_pizza = permite_pizza
+  )
 
   girafe(
-    ggobj = p,
-    width_svg = 9,
-    height_svg = 4.6,
+    ggobj = g$grafico,
+    width_svg = g$largura,
+    height_svg = g$altura,
     options = list(
       opts_hover(css = "opacity:0.85;cursor:pointer;"),
-      opts_hover_inv(css = "opacity:0.45;"),
+      opts_hover_inv(css = "opacity:0.5;"),
       opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
       opts_sizing(rescale = TRUE, width = 1),
       if (selecionavel) {
@@ -867,10 +994,10 @@ grafico_pizza_girafe <- function(resumo, titulo, subtitulo = NULL, selecionavel 
 # (comum às abas Base de Dados e Envio de Magistrados e de Pessoal e
 # Auxiliar — as mesmas regras nos dois módulos)
 # -----------------------------------------------------
-#   - "Agrupar por" escolhe a coluna; os agrupamentos de `pizza`
-#     (poucas categorias, onde importa a proporção) saem em pizza
-#     (grafico_pizza_girafe()), os demais em barras, com o seletor
-#     "Exibir" (maiores grupos) — que some para a pizza;
+#   - "Agrupar por" escolhe a coluna e "Exibir" quantos grupos (os
+#     maiores), sempre lado a lado; o tipo do gráfico sai da quantidade
+#     de grupos exibidos (grafico_automatico_girafe(): pizza até 6,
+#     barras verticais de 7 a 8, barras horizontais de 9 em diante);
 #   - com `detalhe = TRUE` (aba Base de Dados), clicar numa barra/fatia
 #     abre uma janela com os registros do grupo (filtros da aba
 #     aplicados), a opção "Apenas CPFs distintos" e o botão "Gerar
@@ -1000,27 +1127,24 @@ nome_csv_detalhe_grafico <- function(prefixo, agrupar, grupo, quando = Sys.time(
 
 # Controles ("Agrupar por" e "Exibir") e o gráfico. `id`: função que
 # monta o id completo (com namespace) a partir do sufixo.
-ui_grafico_agrupado <- function(id, agrupamentos, pizza) {
+ui_grafico_agrupado <- function(id, agrupamentos, agrupar_padrao = "Cargo", id_grafico = "grafico") {
   tagList(
+    # "Agrupar por" e "Exibir" sempre na mesma linha, qualquer que seja
+    # o tipo do gráfico.
     fluidRow(
-      class = "mt-3",
+      class = "mt-3 g-3 align-items-end",
       id = id("grafico_controles"),
       column(
         4,
         selectInput(
           id("grafico_agrupar"), "Agrupar por",
           choices = names(agrupamentos),
-          selected = "Cargo",
+          selected = agrupar_padrao,
           width = "100%"
         )
       ),
-      conditionalPanel(
-        # "Exibir" não se aplica à pizza.
-        condition = sprintf(
-          "%s.indexOf(input['%s']) < 0",
-          jsonlite::toJSON(pizza), id("grafico_agrupar")
-        ),
-        class = "col-sm-4",
+      column(
+        4,
         selectInput(
           id("grafico_qtd"), "Exibir",
           choices = c(
@@ -1033,14 +1157,14 @@ ui_grafico_agrupado <- function(id, agrupamentos, pizza) {
         )
       )
     ),
-    girafeOutput(id("grafico"))
+    girafeOutput(id(id_grafico))
   )
 }
 
 # Lado do servidor. `p`: prefixo dos ids da aba ("base"/"envio");
 # `dados`: arquivo lido (para saber se há arquivo); `filtrados`: dados
 # de exibição com os filtros da aba. `cfg`:
-#   agrupamentos, pizza, cores_fixas = function(agrupar),
+#   agrupamentos, cores_fixas = function(agrupar),
 #   detalhe_registros = function(df, agrupar, grupo, cpfs_distintos),
 #   icones (nome = agrupamento), pessoas ("magistrado(s)"/"pessoa(s)"),
 #   titulo_pessoas ("Magistrados"/"Pessoas"), nome_csv, detalhe (lógico),
@@ -1111,31 +1235,19 @@ servidor_grafico_agrupado <- function(input, output, session, p, dados, filtrado
         )
       )
 
-    # Pizza: todas as categorias (as menores viram "Outros").
-    if (r$agrupar %in% cfg$pizza) {
-      return(grafico_pizza_girafe(
-        grupos,
-        titulo = sprintf("Distribuição dos Registros por %s", r$agrupar),
-        subtitulo = sprintf(
-          "%d grupo(s)%s", total,
-          if (clicavel) " · clique numa fatia para ver os registros" else ""
-        ),
-        selecionavel = clicavel,
-        cores_fixas = cfg$cores_fixas(r$agrupar)
-      ))
-    }
-
     limite <- suppressWarnings(as.integer(valor("grafico_qtd")))
     exibido <- if (!is.na(limite) && limite > 0) head(grupos, limite) else grupos
 
-    grafico_barras_girafe(
+    # Tipo automático pela quantidade de grupos exibidos; percentuais
+    # sobre o total de registros (mesmo quando só parte dos grupos é
+    # exibida).
+    grafico_automatico_girafe(
       exibido,
-      titulo = sprintf("Quantidade de Registros por %s", r$agrupar),
-      subtitulo = sprintf(
-        "Exibindo %d de %d grupo(s)%s", nrow(exibido), total,
-        if (clicavel) " · clique numa barra para ver os registros" else ""
-      ),
-      selecionavel = clicavel
+      titulo = sprintf("Registros por %s", r$agrupar),
+      subtitulo = sprintf("Exibindo %d de %d grupo(s)", nrow(exibido), total),
+      selecionavel = clicavel,
+      cores_fixas = cfg$cores_fixas(r$agrupar),
+      total_geral = sum(r$resumo$Quantidade)
     )
   })
 
@@ -2026,15 +2138,7 @@ AGRUPAMENTOS_BASE_PESSOAL <- c(
   "Status"                      = REGEX_COL_STATUS_PESSOAL
 )
 
-# Gráfico da aba (mesmas regras de Magistrados — ver
-# servidor_grafico_agrupado()). Em PIZZA os agrupamentos de poucas
-# categorias, em que importa a proporção do todo: os mesmos de
-# Magistrados (Cargo, Sexo, Raça / Cor, Status) e a Área de atuação,
-# que só existe aqui e tem 7 categorias fixas na tabela do MPM. Cargo
-# tem até 14 categorias: as menores viram "Outros". Situação, Órgão e
-# Naturalidade continuam em barras.
-AGRUPAMENTOS_PIZZA_PESSOAL <- c("Cargo", "Área de atuação", "Sexo", "Raça / Cor", "Status")
-
+# Gráfico da aba: mesmas regras de Magistrados (servidor_grafico_agrupado()).
 # Cores fixas: Sexo, Raça/Cor e Status como em Magistrados; Cargo com
 # uma cor para os vínculos mais comuns (efetivo, comissionado sem
 # vínculo, estagiário, terceirizado, cedido de outro tribunal).
@@ -2666,7 +2770,7 @@ ui_aba_cadastro_pessoal <- function(ns, p, titulo, icone) {
         tabPanel(
           tagList(icon("chart-column", class = "me-1"), "Gráfico"),
 
-          ui_grafico_agrupado(id, AGRUPAMENTOS_BASE_PESSOAL, AGRUPAMENTOS_PIZZA_PESSOAL)
+          ui_grafico_agrupado(id, AGRUPAMENTOS_BASE_PESSOAL)
         ),
         tabPanel(
           tagList(icon("file-csv", class = "me-1"), "Gerar arquivo CSV"),
@@ -2960,13 +3064,13 @@ mod_pessoal_auxiliar_ui <- function(id) {
                 tabPanel(
                   tagList(icon("chart-column", class = "me-1"), "Gráfico"),
 
-                  # 1) Tipo de Alerta/Conflito (echarts4r) — em um uiOutput
-                  #    porque a altura acompanha a quantidade de barras.
+                  # 1) Tipo de Alerta/Conflito — tipo do gráfico automático
+                  #    (pizza, barras verticais ou horizontais).
                   uiOutput(ns("grafico_ui")),
 
                   tags$hr(class = "my-4"),
 
-                  # 2) Registros por Cargo (ggiraph)
+                  # 2) Registros por Cargo (idem)
                   girafeOutput(ns("grafico_cargo"))
                 ),
                 tabPanel(
@@ -3174,7 +3278,6 @@ servidor_aba_cadastro_pessoal <- function(input, output, session, p, dados, mapa
     input, output, session, p, dados, filtrados,
     cfg = list(
       agrupamentos = AGRUPAMENTOS_BASE_PESSOAL,
-      pizza = AGRUPAMENTOS_PIZZA_PESSOAL,
       cores_fixas = cores_fixas_pessoal,
       detalhe_registros = detalhe_grafico_pessoal,
       icones = ICONES_AGRUPAMENTO_PESSOAL,
@@ -4273,10 +4376,12 @@ mod_pessoal_auxiliar_server <- function(id, ativo = reactive(TRUE), empresa = re
     # -----------------------------------------------------
     # Os dois gráficos usam dados_filtrados() (mesmos filtros da
     # tabela) e só mudam a apresentação:
-    #   1) Registros por tipo de Alerta/Conflito — echarts4r
-    #      (colunas originais "Alerta: X" / "Conflito: X").
-    #   2) Registros por Cargo — ggiraph (nomenclatura do cargo; ver
+    #   1) Registros por tipo de Alerta/Conflito (colunas originais
+    #      "Alerta: X" / "Conflito: X");
+    #   2) Registros por Cargo (nomenclatura do cargo; ver
     #      traduzir_codigos_tabela()).
+    # O tipo de cada gráfico sai da quantidade de grupos — ver
+    # grafico_automatico_girafe().
     # Cada resumo é um reactive() que devolve list(resumo, mensagem):
     # quando não há o que desenhar, `resumo` é NULL e `mensagem` traz o
     # aviso mostrado no lugar do gráfico (via shiny::validate()).
@@ -4363,69 +4468,46 @@ mod_pessoal_auxiliar_server <- function(id, ativo = reactive(TRUE), empresa = re
       list(resumo = resumo, mensagem = NULL)
     })
     
-    # ---- 1) Tipo de Alerta/Conflito (echarts4r) ----
-    
-    # A altura acompanha o número de barras, para os rótulos não se
-    # sobreporem quando há muitos tipos de alerta.
+    # Tipo de Alerta/Conflito e Cargo: tipo do gráfico automático
+    # pela quantidade de grupos (grafico_automatico_girafe()).
     output$grafico_ui <- renderUI({
-      r <- resumo_tipos()
-      n <- if (is.null(r$resumo)) 0 else nrow(r$resumo)
-      altura <- if (n == 0) 120 else max(320, 34 * n + 110)
-      
-      echarts4rOutput(ns("grafico"), height = paste0(altura, "px"))
+        girafeOutput(ns("grafico"))
     })
     
-    output$grafico <- renderEcharts4r({
-      r <- resumo_tipos()
-      
-      shiny::validate(need(is.null(r$mensagem), r$mensagem))
-      
-      r$resumo %>%
-        e_charts(Tipo) %>%
-        e_bar(Quantidade, name = "Registros") %>%
-        e_flip_coords() %>%
-        e_labels(position = "right") %>%
-        e_color(COR_GRAFICO) %>%
-        e_title("Quantidade de Registros por Tipo de Alerta/Conflito") %>%
-        e_tooltip(trigger = "item") %>%
-        e_legend(show = FALSE) %>%
-        e_grid(containLabel = TRUE, left = "2%", right = "8%") %>%
-        e_toolbox_feature(feature = "saveAsImage")
+    output$grafico <- renderGirafe({
+        r <- resumo_tipos()
+        
+        shiny::validate(need(is.null(r$mensagem), r$mensagem))
+        
+        resumo <- r$resumo %>%
+            transmute(
+                Grupo = str_squish(gsub("\n", " ", Tipo)),
+                Quantidade,
+                dica = sprintf("<b>%s</b><br/>%s registro(s)", htmltools::htmlEscape(Grupo), fmt_qtd_grafico(Quantidade))
+            ) %>%
+            filter(Quantidade > 0)
+        
+        grafico_automatico_girafe(resumo, titulo = "Registros por Tipo de Alerta/Conflito")
     })
-    
-    # ---- 2) Registros por Cargo (ggiraph) ----
     
     output$grafico_cargo <- renderGirafe({
-      r <- resumo_cargos()
-
-      shiny::validate(need(is.null(r$mensagem), r$mensagem))
-
-      resumo <- r$resumo %>%
-        transmute(
-          Grupo = Cargo,
-          Quantidade,
-          dica = sprintf(
-            "<b>%s</b><br/>%s registro(s)",
-            htmltools::htmlEscape(Cargo),
-            format(Quantidade, big.mark = ".", decimal.mark = ",")
-          )
+        r <- resumo_cargos()
+        
+        shiny::validate(need(is.null(r$mensagem), r$mensagem))
+        
+        resumo <- r$resumo %>%
+            transmute(
+                Grupo = Cargo,
+                Quantidade,
+                dica = sprintf("<b>%s</b><br/>%s registro(s)", htmltools::htmlEscape(Cargo), fmt_qtd_grafico(Quantidade))
+            )
+        
+        grafico_automatico_girafe(
+            resumo,
+            titulo = "Registros por Cargo",
+            cores_fixas = cores_fixas_pessoal("Cargo")
         )
-
-      grafico_pizza_girafe(
-        resumo,
-        titulo = "Distribuição dos Registros por Cargo",
-        cores_fixas = cores_fixas_pessoal("Cargo")
-      )
     })
-    
-    # ==============================================
-    # GERAR ARQUIVO CSV
-    #
-    # O botão só fica disponível quando a Tabela tem
-    # dados a exibir (mesmos dados/filtros da aba
-    # "Tabela"). Nome do arquivo: "alertas-" +
-    # ano/mês/dia + hora/minuto da geração.
-    # ==============================================
     
     output$csv_ui <- renderUI({
       df <- tabela_exibicao()

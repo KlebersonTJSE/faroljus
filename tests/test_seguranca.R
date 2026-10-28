@@ -85,6 +85,11 @@ if (!requireNamespace("echarts4r", quietly = TRUE)) {
 if (!requireNamespace("ggiraph", quietly = TRUE)) {
     renderGirafe <- function(expr, ...) shiny::renderUI(NULL)
     girafeOutput <- function(...) shiny::div()
+    # Geoms interativos viram os comuns (sem tooltip/data_id), para os
+    # testes montarem os gráficos (grafico_automatico_gg()).
+    sem_interacao <- function(mapping) { mapping$tooltip <- NULL; mapping$data_id <- NULL; mapping }
+    geom_col_interactive <- function(mapping = NULL, ...) ggplot2::geom_col(sem_interacao(mapping), ...)
+    geom_text_interactive <- function(mapping = NULL, ...) ggplot2::geom_text(sem_interacao(mapping), ...)
 }
 
 # ldap3 falso: aceita só "ana" / "senha certa" e registra cada bind e
@@ -1639,9 +1644,6 @@ testServer(mod_magistrados_server, args = list(empresa = reactive("MPRO"), ativo
 invisible(file.remove(file.path(pasta_magistrados("MPRO"), "magistrados.csv")))
 
 # Pizza (Cargo, Sexo, Raça / Cor, Status)
-checar("Pizza: Cargo, Sexo, Raça / Cor e Status (opções existentes de Agrupar por)",
-       identical(AGRUPAMENTOS_PIZZA_MAGISTRADOS, c("Cargo", "Sexo", "Raça / Cor", "Status")) &&
-           all(AGRUPAMENTOS_PIZZA_MAGISTRADOS %in% names(AGRUPAMENTOS_BASE_MAGISTRADOS)))
 fz <- fatias_pizza(tibble(Grupo = c("Masculino", "Feminino", ROTULO_VALOR_VAZIO), Quantidade = c(361, 300, 3), dica = "x"),
                    cores_fixas_magistrados("Sexo"))
 checar("Pizza: maior fatia primeiro, legenda com quantidade e percentual sem espaços sobrando",
@@ -1657,9 +1659,6 @@ checar("Pizza: mais de 8 grupos → 7 maiores + \"Outros\" (não clicável), som
 fs <- fatias_pizza(tibble(Grupo = c("Inativo", "Ativo"), Quantidade = c(357, 304), dica = "x"), cores_fixas_magistrados("Status"))
 checar("Pizza: Status Ativo verde e Inativo grafite",
        identical(fs$cor, unname(PALETA_GRAFICOS[c("grafite", "verde")])))
-ui_mag <- paste(as.character(mod_magistrados_ui("magistrados")), collapse = "")
-checar("Pizza: o seletor \"Exibir\" (maiores grupos) some quando o gráfico é pizza",
-       grepl("data-display-if=\"[&quot;Cargo&quot;,&quot;Sexo&quot;,&quot;Raça / Cor&quot;,&quot;Status&quot;].indexOf(input[&#39;magistrados-base_grafico_agrupar&#39;]) &lt; 0\"", ui_mag, fixed = TRUE))
 
 codigo_app <- paste(readLines(here::here("app.R"), warn = FALSE), collapse = "\n")
 checar("Todas as janelas: script coloca o X (data-bs-dismiss) quando a janela não tem um",
@@ -1701,10 +1700,6 @@ srv_base_g <- data.frame(
 srv_exib <- traduzir_codigos_tabela(srv_base_g)
 efetivo <- CARGO_SERVIDOR[["1"]]
 
-checar("Pessoal: Cargo, Área de atuação, Sexo, Raça / Cor e Status em pizza; o resto em barras",
-       identical(AGRUPAMENTOS_PIZZA_PESSOAL, c("Cargo", "Área de atuação", "Sexo", "Raça / Cor", "Status")) &&
-           all(AGRUPAMENTOS_PIZZA_PESSOAL %in% names(AGRUPAMENTOS_BASE_PESSOAL)) &&
-           all(setdiff(AGRUPAMENTOS_PIZZA_MAGISTRADOS, "Área de atuação") %in% AGRUPAMENTOS_PIZZA_PESSOAL))
 checar("Pessoal: todas as opções de Agrupar por têm ícone na janela",
        setequal(names(ICONES_AGRUPAMENTO_PESSOAL), names(AGRUPAMENTOS_BASE_PESSOAL)))
 dp <- detalhe_grafico_pessoal(srv_exib, "Cargo", efetivo)
@@ -1727,9 +1722,6 @@ checar("Pessoal: cores fixas do Cargo (efetivo azul) e Status/Sexo iguais às de
            identical(cores_fixas_pessoal("Sexo"), cores_fixas_magistrados("Sexo")))
 fl <- fatias_pizza(tibble(Grupo = CARGO_SERVIDOR[["3"]], Quantidade = 1, dica = "x"))
 checar("Pizza: legenda de cargo longo quebra em linhas", grepl("\n", as.character(fl$legenda)))
-ui_pa <- paste(as.character(mod_pessoal_auxiliar_ui("pessoal_auxiliar")), collapse = "")
-checar("Pessoal: o seletor \"Exibir\" some quando o gráfico é pizza",
-       grepl("[&quot;Cargo&quot;,&quot;Área de atuação&quot;,&quot;Sexo&quot;,&quot;Raça / Cor&quot;,&quot;Status&quot;].indexOf(input[&#39;pessoal_auxiliar-base_grafico_agrupar&#39;])", ui_pa, fixed = TRUE))
 
 dir.create(pasta_pessoal("MPRO"), recursive = TRUE, showWarnings = FALSE)
 readr::write_csv2(srv_base_g, file.path(pasta_pessoal("MPRO"), "pessoal_auxiliar.csv"))
@@ -1761,6 +1753,66 @@ testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("MPRO"), 
     checar("Pessoal > Envio: o clique não abre a janela (só na Base de Dados)", is.null(aba_envio$detalhe()))
 })
 invisible(file.remove(file.path(pasta_pessoal("MPRO"), "pessoal_auxiliar.csv")))
+
+# =====================================================
+cat("\n[18] Gráficos automáticos: tipo pela quantidade de grupos, em toda a aplicação\n")
+# =====================================================
+
+checar("Tipo automático: até 6 grupos pizza, 7 a 8 barras verticais, 9 ou mais barras horizontais",
+       identical(vapply(c(1, 2, 6, 7, 8, 9, 20), tipo_grafico_automatico, ""),
+                 c("pizza", "pizza", "pizza", "colunas", "colunas", "barras", "barras")))
+resumo_n <- function(n) tibble(Grupo = paste("Grupo", sprintf("%02d", seq_len(n))), Quantidade = rev(seq_len(n)) * 10, dica = "x")
+checar("Gráfico: Sexo (2 grupos) sai em pizza",
+       grafico_automatico_gg(tibble(Grupo = c("Masculino", "Feminino"), Quantidade = c(361, 300), dica = "x"), "t")$tipo == "pizza")
+g7 <- grafico_automatico_gg(resumo_n(7), "t"); g12 <- grafico_automatico_gg(resumo_n(12), "t")
+checar("Gráfico: 7 grupos em barras verticais e 12 em barras horizontais (coord_flip)",
+       g7$tipo == "colunas" && !inherits(g7$grafico$coordinates, "CoordFlip") &&
+           g12$tipo == "barras" && inherits(g12$grafico$coordinates, "CoordFlip"))
+d12 <- preparar_grupos_grafico(resumo_n(12), cores_fixas_comuns("Sexo"))
+checar("Barras: mesmas cores da pizza (paleta na ordem do maior para o menor; tons depois da 5ª)",
+       identical(d12$cor[1:5], unname(PALETA_GRAFICOS)) && identical(d12$cor[6:10], unname(clarear_cor(unname(PALETA_GRAFICOS), 0.40))))
+ds <- preparar_grupos_grafico(tibble(Grupo = c("Inativo", "Ativo", ROTULO_VALOR_VAZIO), Quantidade = c(5, 4, 1), dica = "x"), cores_fixas_comuns("Status"))
+checar("Barras e pizza: cores fixas por categoria (Ativo verde, Inativo grafite, não informado cinza)",
+       identical(ds$cor, c(PALETA_GRAFICOS[["grafite"]], PALETA_GRAFICOS[["verde"]], COR_GRAFICO_SEM_INFO)))
+dt <- preparar_grupos_grafico(resumo_n(3), total_geral = 1000)
+checar("Percentual sobre o total geral quando o Exibir mostra só parte dos grupos", identical(dt$pct_txt, c("3,0%", "2,0%", "1,0%")))
+ga <- grafico_automatico_gg(resumo_n(9), "t", "Exibindo 9 de 9 grupo(s)", clicavel = TRUE)
+gp <- grafico_automatico_gg(resumo_n(3), "t", clicavel = TRUE)
+checar("Aviso de clique conforme o tipo (barra / fatia)",
+       grepl("clique numa barra", ga$grafico$labels$subtitle) && grepl("clique numa fatia", gp$grafico$labels$subtitle))
+checar("Agrupamento com valores múltiplos não vira pizza (Serventias: Município, Competência)",
+       grafico_automatico_gg(resumo_n(3), "t", permite_pizza = FALSE)$tipo == "colunas")
+checar("Gráfico estático (Administração) sai sem interatividade, no mesmo padrão",
+       inherits(grafico_automatico_gg(resumo_n(3), NULL, interativo = FALSE, legenda = "bottom")$grafico, "ggplot"))
+checar("Barras horizontais: altura cresce com a quantidade de grupos",
+       grafico_automatico_gg(resumo_n(30), "t")$altura > grafico_automatico_gg(resumo_n(10), "t")$altura)
+
+controles_mesma_linha <- function(h, prefixo) {
+    linha <- regmatches(h, regexpr(sprintf('<div class="row[^"]*" id="%s_grafico_controles">.*?id="%s_grafico_qtd"', prefixo, prefixo), h))
+    length(linha) == 1 && grepl(sprintf('id="%s_grafico_agrupar"', prefixo), linha) && !grepl("data-display-if", linha)
+}
+uis <- list(
+    Magistrados = paste(as.character(mod_magistrados_ui("magistrados")), collapse = ""),
+    `Pessoal e Auxiliar` = paste(as.character(mod_pessoal_auxiliar_ui("pessoal_auxiliar")), collapse = ""),
+    Serventias = paste(as.character(mod_serventias_ui("serventias")), collapse = "")
+)
+ids <- c(Magistrados = "magistrados", `Pessoal e Auxiliar` = "pessoal_auxiliar", Serventias = "serventias")
+for (m in names(uis)) {
+    checar(sprintf("%s: \"Agrupar por\" e \"Exibir\" sempre na mesma linha (Base e Envio)", m),
+           controles_mesma_linha(uis[[m]], paste0(ids[[m]], "-base")) && controles_mesma_linha(uis[[m]], paste0(ids[[m]], "-envio")))
+}
+codigo_modulos <- paste(unlist(lapply(list.files(here::here("modules"), full.names = TRUE), readLines, warn = FALSE)), collapse = "\n")
+checar("Nenhum gráfico com tipo fixo sobrou (echarts4r, barras/pizza fixas, barplot/pie base)",
+       !grepl("e_charts\\(|grafico_barras_girafe\\(|grafico_pizza_girafe\\(|geom_col_interactive\\(aes\\(tooltip = dica, data_id = (Cargo|Status|Grupo)\\)|\\bpie\\(|horiz = TRUE", codigo_modulos))
+
+# Painel (HTML): mesma regra
+r_p <- function(n) tibble(categoria = paste("Cat", seq_len(n)), n = rev(seq_len(n)), pct = 100 * rev(seq_len(n)) / sum(seq_len(n)))
+cores_p <- function(n) stats::setNames(paleta_graficos(n), paste("Cat", seq_len(n)))
+html_p <- function(n, ...) as.character(painel_grafico(r_p(n), cores_p(n), ...))
+checar("Painel: rosca até 6, barras verticais de 7 a 8, horizontais de 9 em diante",
+       grepl("pn-rosca", html_p(6)) && grepl("pn-colunas", html_p(8)) && grepl("pn-barras", html_p(9)))
+checar("Painel: tipos de deficiência (uma pessoa em mais de um tipo) não viram rosca",
+       grepl("pn-barras", html_p(3, permite_pizza = FALSE)))
 
 # =====================================================
 
