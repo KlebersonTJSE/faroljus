@@ -241,20 +241,26 @@ AGRUPAMENTOS_BASE_MAGISTRADOS <- c(
 # registros daquele cargo (já com os filtros da aba aplicados) nas
 # colunas abaixo — na ordem em que aparecem aqui. Coluna que não existir
 # no arquivo fica de fora.
+#
+# "Apenas CPFs distintos" (opção da janela): uma linha por CPF — o
+# registro com a data de início da situação mais recente, pela mesma
+# regra de ultimo_registro_por_cpf() (empate: o último no arquivo;
+# registro sem data só vale se o CPF não tiver nenhum datado). CPFs com
+# e sem zero à esquerda são o mesmo (chave_cpf()). Linhas sem CPF ficam.
 # =====================================================
 
 COLUNAS_DETALHE_CARGO_MAGISTRADOS <- c(
-    "CPF"                           = REGEX_COL_CPF,
-    "Nome"                          = REGEX_COL_NOME,
-    "Cargo"                         = REGEX_COL_CARGO,
-    "Situação Profissional"         = REGEX_COL_SITUACAO,
-    "Data de Início da Situação"    = REGEX_COL_INICIO_SITUACAO,
-    "Data de Saída da Situação"     = REGEX_COL_SAIDA_SITUACAO
+    "CPF"                                 = REGEX_COL_CPF,
+    "Nome"                                = REGEX_COL_NOME,
+    "Órgão de lotação do magistrado(a)"   = REGEX_COL_ORGAO_MAGISTRADO,
+    "Cargo"                               = REGEX_COL_CARGO,
+    "Situação Profissional"               = REGEX_COL_SITUACAO,
+    "Data de Início da Situação"          = REGEX_COL_INICIO_SITUACAO
 )
 
 # `df`: dados de exibição (cargo por extenso) já filtrados; `cargo`: o
 # valor da barra clicada. Datas em dd/mm/aaaa; ordem por nome.
-detalhe_cargo_magistrados <- function(df, cargo) {
+detalhe_cargo_magistrados <- function(df, cargo, cpfs_distintos = FALSE) {
 
     # Mesmo valor que o gráfico usa para agrupar (inclusive o rótulo de
     # cargo vazio).
@@ -264,6 +270,20 @@ detalhe_cargo_magistrados <- function(df, cargo) {
     }
 
     sel <- df[grupos == cargo, , drop = FALSE]
+
+    col_cpf <- coluna_por_regex(sel, REGEX_COL_CPF)
+    col_inicio <- coluna_por_regex(sel, REGEX_COL_INICIO_SITUACAO)
+
+    if (isTRUE(cpfs_distintos) && !is.null(col_cpf) && nrow(sel) > 0) {
+        chave <- chave_cpf(sel[[col_cpf]])
+        inicio <- if (is.null(col_inicio)) as.Date(rep(NA, nrow(sel))) else converter_data(sel[[col_inicio]])
+        ordem <- seq_len(nrow(sel))
+        # Dentro de cada CPF: sem data primeiro, depois por data e ordem
+        # no arquivo — o último de cada grupo é o que fica.
+        idx <- order(chave, !is.na(inicio), inicio, ordem, na.last = FALSE)
+        ultimo <- !duplicated(chave[idx], fromLast = TRUE) | chave[idx] == ""
+        sel <- sel[sort(idx[ultimo]), , drop = FALSE]
+    }
 
     colunas <- list()
     for (rotulo in names(COLUNAS_DETALHE_CARGO_MAGISTRADOS)) {
@@ -1295,8 +1315,9 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         # abrir a janela.
         session$sendCustomMessage(paste0(ns(id("grafico")), "_set"), character(0))
         
-        tab <- detalhe_cargo_magistrados(filtrados(), cargo)
-        detalhe_atual(list(cargo = cargo, tabela = tab))
+        base_cargo <- filtrados()
+        tab <- detalhe_cargo_magistrados(base_cargo, cargo)
+        detalhe_atual(list(cargo = cargo, tabela = tab, dados = base_cargo))
         
         n_pessoas <- if ("CPF" %in% names(tab)) {
             length(unique(tab$CPF[!is.na(tab$CPF) & tab$CPF != ""]))
@@ -1324,16 +1345,37 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
                 )
             ),
             
+            radioButtons(
+                ns(id("detalhe_cargo_modo")), "Mostrar",
+                choices = c(
+                    "Todos os registros" = "todos",
+                    "Apenas CPFs distintos (situação mais recente de cada um)" = "distintos"
+                ),
+                selected = "todos",
+                inline = TRUE
+            ),
+            
             DTOutput(ns(id("detalhe_cargo_tabela")))
         ))
         
     }, ignoreInit = TRUE)
     
+    # Tabela da janela conforme a opção "Mostrar" (todos ou CPFs distintos).
+    detalhe_cargo_tabela_exibida <- reactive({
+        d <- detalhe_atual()
+        req(d)
+        if (identical(valor("detalhe_cargo_modo"), "distintos")) {
+            detalhe_cargo_magistrados(d$dados, d$cargo, cpfs_distintos = TRUE)
+        } else {
+            d$tabela
+        }
+    })
+    
     output[[id("detalhe_cargo_tabela")]] <- renderDT({
         d <- detalhe_atual()
         shiny::validate(need(!is.null(d) && nrow(d$tabela) > 0, "Nenhum registro para este cargo."))
         datatable(
-            d$tabela,
+            detalhe_cargo_tabela_exibida(),
             rownames = FALSE,
             filter = "top",
             width = "100%",
@@ -1375,7 +1417,8 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         filtrados = filtrados,
         atualizar_combos = atualizar_combos,
         msg_sem_dados = msg_sem_dados,
-        detalhe_cargo = detalhe_atual
+        detalhe_cargo = detalhe_atual,
+        detalhe_cargo_tabela = detalhe_cargo_tabela_exibida
     )
     
 }

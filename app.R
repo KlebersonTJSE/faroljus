@@ -1253,6 +1253,52 @@ ui <- fluidPage(
         flex: 1 1 auto;
       }
 
+      /* X colocado pelo script X EM TODAS AS JANELAS (abaixo) */
+      .modal-header > .fj-fechar-x { margin-left: .75rem; flex: 0 0 auto; }
+      .modal-content > .fj-fechar-x {
+        position: absolute; top: .9rem; right: .9rem; z-index: 2;
+      }
+      .modal-content.fj-sem-cabecalho > .modal-body { padding-right: 2.75rem; }
+
+    ")),
+        
+        # =================================================
+        # X EM TODAS AS JANELAS (MODAIS)
+        # -------------------------------------------------
+        # Toda janela aberta ganha um X no canto superior direito,
+        # que fecha como o botão Fechar/Cancelar do rodapé
+        # (data-bs-dismiss). Janelas que já têm um X próprio
+        # (titulo_modal(), Gerenciar Arquivos) ficam como estão —
+        # inclusive Administração, cujo X avisa o servidor ao fechar.
+        # Sem cabeçalho (title = NULL), o X vai no canto da janela.
+        # =================================================
+        
+        tags$script(HTML("
+      (function() {
+        function adicionarX(modal) {
+          var conteudo = modal.querySelector('.modal-content');
+          if (!conteudo || conteudo.querySelector('.btn-close')) return;
+          var x = document.createElement('button');
+          x.type = 'button';
+          x.className = 'btn-close fj-fechar-x';
+          x.title = 'Fechar';
+          x.setAttribute('aria-label', 'Fechar');
+          x.setAttribute('data-bs-dismiss', 'modal');
+          x.setAttribute('data-dismiss', 'modal');
+          var cabecalho = conteudo.querySelector('.modal-header');
+          if (cabecalho) {
+            cabecalho.appendChild(x);
+          } else {
+            conteudo.classList.add('fj-sem-cabecalho');
+            conteudo.insertBefore(x, conteudo.firstChild);
+          }
+        }
+        function verificar() {
+          document.querySelectorAll('.modal').forEach(adicionarX);
+        }
+        new MutationObserver(verificar).observe(document.documentElement, { childList: true, subtree: true });
+        document.addEventListener('DOMContentLoaded', verificar);
+      })();
     ")),
         
         # =================================================
