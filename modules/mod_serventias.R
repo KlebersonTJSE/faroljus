@@ -1080,7 +1080,7 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
             )
         
         p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
-            geom_col_interactive(aes(tooltip = dica, data_id = Grupo), fill = "#2C7FB8") +
+            geom_col_interactive(aes(tooltip = dica, data_id = Grupo), fill = COR_GRAFICO) +
             geom_text(aes(label = Quantidade), hjust = -0.2, size = 3.2) +
             coord_flip() +
             scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
@@ -1099,7 +1099,7 @@ servidor_aba_cadastro_serventias <- function(input, output, session, p, dados,
             width_svg = 9,
             height_svg = max(3, 0.28 * max(nrow(resumo), linhas_rotulo) + 1.6),
             options = list(
-                opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
+                opts_hover(css = CSS_HOVER_GRAFICO),
                 opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
                 opts_sizing(rescale = TRUE, width = 1)
             )
@@ -2404,7 +2404,7 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
                 e_bar(Quantidade, name = "Registros") %>%
                 e_flip_coords() %>%
                 e_labels(position = "right") %>%
-                e_color("#2C7FB8") %>%
+                e_color(COR_GRAFICO) %>%
                 e_title("Quantidade de Registros por Tipo de Alerta/Conflito") %>%
                 e_tooltip(trigger = "item") %>%
                 e_legend(show = FALSE) %>%
@@ -2429,7 +2429,7 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
                 )
             
             p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
-                geom_col_interactive(aes(tooltip = dica, data_id = Status), fill = "#2C7FB8") +
+                geom_col_interactive(aes(tooltip = dica, data_id = Status), fill = COR_GRAFICO) +
                 geom_text(aes(label = Quantidade), hjust = -0.2) +
                 coord_flip() +
                 scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
@@ -2441,7 +2441,7 @@ mod_serventias_server <- function(id, ativo = reactive(TRUE), empresa = reactive
                 width_svg = 9,
                 height_svg = max(3, 0.45 * nrow(resumo) + 1.5),
                 options = list(
-                    opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
+                    opts_hover(css = CSS_HOVER_GRAFICO),
                     opts_sizing(rescale = TRUE, width = 1)
                 )
             )

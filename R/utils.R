@@ -317,3 +317,44 @@ limpar_cache_arquivos <- function(pasta = NULL) {
     invisible(TRUE)
     
 }
+
+# =====================================================
+# PALETA DOS GRÁFICOS
+# -----------------------------------------------------
+# Cores usadas em todos os gráficos da aplicação (barras, roscas,
+# comparativos e indicadores do Painel). Barras de série única usam
+# COR_GRAFICO; ao passar o mouse, COR_GRAFICO_DESTAQUE.
+# Quando há mais categorias que cores, paleta_graficos() acrescenta
+# tons mais claros das mesmas cores (nunca outras cores).
+# =====================================================
+
+PALETA_GRAFICOS <- c(
+    ciano   = "#00B8D9",
+    azul    = "#005B96",
+    laranja = "#FF8C42",
+    grafite = "#4A4A4A",
+    verde   = "#4CAF50"
+)
+
+COR_GRAFICO <- PALETA_GRAFICOS[["azul"]]
+COR_GRAFICO_DESTAQUE <- PALETA_GRAFICOS[["ciano"]]
+
+# Cinza claro derivado do grafite, para "Sem informação".
+COR_GRAFICO_SEM_INFO <- "#A4A4A4"
+
+# CSS de hover/seleção das barras interativas (ggiraph).
+CSS_HOVER_GRAFICO <- sprintf("fill:%s;cursor:pointer;", COR_GRAFICO_DESTAQUE)
+
+# Clareia uma cor hex misturando-a com branco (`fator` de 0 a 1).
+clarear_cor <- function(cor, fator) {
+    rgb_cor <- grDevices::col2rgb(cor)
+    novo <- rgb_cor + (255 - rgb_cor) * fator
+    grDevices::rgb(novo[1, ], novo[2, ], novo[3, ], maxColorValue = 255)
+}
+
+# `n` cores: as 5 da paleta e, depois, tons 40% e 65% mais claros delas.
+paleta_graficos <- function(n = length(PALETA_GRAFICOS)) {
+    base <- unname(PALETA_GRAFICOS)
+    todas <- c(base, clarear_cor(base, 0.40), clarear_cor(base, 0.65))
+    rep_len(todas, n)
+}

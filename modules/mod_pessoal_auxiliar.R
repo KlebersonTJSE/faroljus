@@ -673,7 +673,9 @@ tabela_dt <- function(df, ...) {
 # já na ordem desejada (maior primeiro) — a maior barra fica no topo.
 # =====================================================
 
-grafico_barras_girafe <- function(resumo, titulo, subtitulo = NULL) {
+# `selecionavel = TRUE`: clicar numa barra envia o Grupo dela para
+# input$<id do gráfico>_selected (ggiraph), usado para abrir o detalhe.
+grafico_barras_girafe <- function(resumo, titulo, subtitulo = NULL, selecionavel = FALSE) {
 
   resumo <- resumo %>%
     mutate(
@@ -687,7 +689,7 @@ grafico_barras_girafe <- function(resumo, titulo, subtitulo = NULL) {
   p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
     geom_col_interactive(
       aes(tooltip = dica, data_id = Grupo),
-      fill = "#2C7FB8"
+      fill = COR_GRAFICO
     ) +
     geom_text(aes(label = Quantidade), hjust = -0.2, size = 3.2) +
     coord_flip() +
@@ -700,9 +702,14 @@ grafico_barras_girafe <- function(resumo, titulo, subtitulo = NULL) {
     width_svg = 9,
     height_svg = max(3, 0.32 * nrow(resumo) + 1.6),
     options = list(
-      opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
+      opts_hover(css = CSS_HOVER_GRAFICO),
       opts_tooltip(css = "background:#fff;color:#212529;padding:8px 10px;border:1px solid #dee2e6;border-radius:6px;font-size:12px;max-width:420px;"),
-      opts_sizing(rescale = TRUE, width = 1)
+      opts_sizing(rescale = TRUE, width = 1),
+      if (selecionavel) {
+        opts_selection(type = "single", css = CSS_HOVER_GRAFICO, only_shiny = TRUE)
+      } else {
+        opts_selection(type = "none")
+      }
     )
   )
 
@@ -3814,7 +3821,7 @@ mod_pessoal_auxiliar_server <- function(id, ativo = reactive(TRUE), empresa = re
         e_bar(Quantidade, name = "Registros") %>%
         e_flip_coords() %>%
         e_labels(position = "right") %>%
-        e_color("#2C7FB8") %>%
+        e_color(COR_GRAFICO) %>%
         e_title("Quantidade de Registros por Tipo de Alerta/Conflito") %>%
         e_tooltip(trigger = "item") %>%
         e_legend(show = FALSE) %>%
@@ -3843,7 +3850,7 @@ mod_pessoal_auxiliar_server <- function(id, ativo = reactive(TRUE), empresa = re
       p <- ggplot(resumo, aes(x = rotulo, y = Quantidade)) +
         geom_col_interactive(
           aes(tooltip = dica, data_id = Cargo),
-          fill = "#2C7FB8"
+          fill = COR_GRAFICO
         ) +
         geom_text(aes(label = Quantidade), hjust = -0.2) +
         coord_flip() +
@@ -3860,7 +3867,7 @@ mod_pessoal_auxiliar_server <- function(id, ativo = reactive(TRUE), empresa = re
         width_svg = 9,
         height_svg = max(3, 0.45 * nrow(resumo) + 1.5),
         options = list(
-          opts_hover(css = "fill:#0d6efd;cursor:pointer;"),
+          opts_hover(css = CSS_HOVER_GRAFICO),
           opts_sizing(rescale = TRUE, width = 1)
         )
       )

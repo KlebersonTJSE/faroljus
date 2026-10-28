@@ -1541,6 +1541,64 @@ checar("R/tabelas_referencia.R carrega sozinho (autoload do Shiny, antes dos mó
        !inherits(r_autoload, "try-error"))
 
 # =====================================================
+cat("\n[16] Magistrados: clique na barra de Cargo abre os registros; paleta dos gráficos\n")
+# =====================================================
+
+mag_exib <- traduzir_codigos_magistrados(mag_base_ne)
+cargo_2 <- CARGO_MAGISTRADO[["2"]]
+det <- detalhe_cargo_magistrados(mag_exib, cargo_2)
+checar("Detalhe do cargo: colunas CPF, Nome, Cargo, Situação, Início e Saída, nessa ordem",
+       identical(names(det), c("CPF", "Nome", "Cargo", "Situação Profissional",
+                               "Data de Início da Situação", "Data de Saída da Situação")))
+checar("Detalhe do cargo: só os registros do cargo clicado (5 do cargo 2), ordenados por nome",
+       nrow(det) == 5 && all(det$Cargo == cargo_2) && !is.unsorted(det$Nome))
+checar("Detalhe do cargo: situação por extenso e datas em dd/mm/aaaa",
+       any(det$`Situação Profissional` == SITUACAO_PROFISSIONAL_MAGISTRADO[["12"]]) &&
+           all(grepl("^\\d{2}/\\d{2}/\\d{4}$", det$`Data de Início da Situação`)) &&
+           "01/06/2026" %in% det$`Data de Saída da Situação`)
+checar("Detalhe do cargo: data serial do Excel vira dd/mm/aaaa",
+       identical(detalhe_cargo_magistrados(data.frame(Cargo = "X", `Data de início da situação` = "46279", check.names = FALSE), "X")$`Data de Início da Situação`,
+                 format(as.Date(46279, origin = "1899-12-30"), "%d/%m/%Y")))
+checar("Detalhe do cargo: cargo vazio casa com o rótulo da barra (vazio)",
+       nrow(detalhe_cargo_magistrados(data.frame(Cargo = c("", "1"), Nome = c("A", "B")), ROTULO_VALOR_VAZIO)) == 1)
+
+readr::write_csv2(mag_base_ne, file.path(pasta_magistrados("MPRO"), "magistrados.csv"))
+limpar_cache_arquivos()
+testServer(mod_magistrados_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "base", base_status = "Todos", base_cargo = "Todos", base_situacao = "Todos",
+                      base_orgao = "Todos", base_cpf = "", base_nome = "", base_detalhe = "",
+                      base_grafico_agrupar = "Cargo", base_grafico_qtd = "20")
+    session$setInputs(base_grafico_selected = cargo_2)
+    d <- aba_base$detalhe_cargo()
+    checar("Base > Gráfico (Cargo): clicar na barra abre a janela com os registros do cargo",
+           !is.null(d) && identical(d$cargo, cargo_2) && nrow(d$tabela) == 5)
+    session$setInputs(base_status = "Ativo")
+    session$setInputs(base_grafico_selected = character(0))
+    session$setInputs(base_grafico_selected = cargo_2)
+    checar("Base > Gráfico (Cargo): a janela respeita os filtros da aba (Status Ativo)",
+           nrow(aba_base$detalhe_cargo()$tabela) == 2)
+    aba_base$detalhe_cargo(NULL)
+    session$setInputs(base_grafico_agrupar = "Sexo", base_grafico_selected = "Masculino")
+    checar("Base > Gráfico: com outro agrupamento o clique não abre a janela", is.null(aba_base$detalhe_cargo()))
+    session$setInputs(secao = "envio", envio_grafico_agrupar = "Cargo", envio_grafico_selected = cargo_2)
+    checar("Envio > Gráfico: o clique não abre a janela (só na Base de Dados)", is.null(aba_envio$detalhe_cargo()))
+})
+invisible(file.remove(file.path(pasta_magistrados("MPRO"), "magistrados.csv")))
+
+checar("Paleta: as 5 cores definidas, na ordem", identical(unname(PALETA_GRAFICOS),
+       c("#00B8D9", "#005B96", "#FF8C42", "#4A4A4A", "#4CAF50")))
+checar("Paleta: barras e destaque usam a paleta", COR_GRAFICO %in% PALETA_GRAFICOS && COR_GRAFICO_DESTAQUE %in% PALETA_GRAFICOS)
+checar("Paleta: mais de 5 categorias recebem tons das mesmas cores, sem repetir até 15",
+       length(unique(paleta_graficos(15))) == 15 && identical(paleta_graficos(5), unname(PALETA_GRAFICOS)))
+checar("Paleta: Painel usa a paleta (público, sexo, raça)",
+       all(c(PAINEL_COR_PUBLICO, PAINEL_CORES_SEXO, PAINEL_CORES_RACA) %in% PALETA_GRAFICOS) &&
+           identical(PAINEL_PALETA[1:5], unname(PALETA_GRAFICOS)))
+cores_fixas_antigas <- c("#2C7FB8", "#F28E2B", "#59A14F", "#E15759", "#C2456E", "#2C9AA8", "#B07AA1", "#EDC948", "#0d6efd;cursor")
+codigo_modulos <- paste(unlist(lapply(list.files(here::here("modules"), full.names = TRUE), readLines, warn = FALSE)), collapse = "\n")
+checar("Paleta: nenhuma cor antiga de gráfico sobrou nos módulos",
+       !any(vapply(cores_fixas_antigas, function(cor) grepl(cor, codigo_modulos, fixed = TRUE), logical(1))))
+
+# =====================================================
 
 cat(sprintf("\n%d de %d verificações passaram.\n", total - falhas, total))
 if (falhas > 0) quit(status = 1)
