@@ -1547,9 +1547,9 @@ cat("\n[16] Magistrados: clique nas barras do gráfico abre os registros (com CS
 mag_exib <- traduzir_codigos_magistrados(mag_base_ne)
 cargo_2 <- CARGO_MAGISTRADO[["2"]]
 det <- detalhe_cargo_magistrados(mag_exib, cargo_2)
-checar("Detalhe do cargo: colunas CPF, Nome, Órgão, Cargo, Situação e Início, nessa ordem",
+checar("Detalhe do cargo: colunas CPF, Nome, Órgão, Cargo, Situação, Início e Saída, nessa ordem",
        identical(names(det), c("CPF", "Nome", "Órgão de lotação do magistrado(a)", "Cargo",
-                               "Situação Profissional", "Data de Início da Situação")))
+                               "Situação Profissional", "Data de Início da Situação", "Data de Saída da Situação")))
 checar("Detalhe do cargo: só os registros do cargo clicado (5 do cargo 2), ordenados por nome",
        nrow(det) == 5 && all(det$Cargo == cargo_2) && !is.unsorted(det$Nome))
 checar("Detalhe do cargo: situação por extenso e datas em dd/mm/aaaa",
@@ -1629,10 +1629,37 @@ testServer(mod_magistrados_server, args = list(empresa = reactive("MPRO"), ativo
            nrow(d$tabela) == 2 && identical(names(d$tabela), c("CPF", "Nome", "Cargo", "Situação Profissional",
                                                                 "Data de Início da Situação", "Data de Saída da Situação")))
 
+    aba_base$detalhe(NULL)
+    session$setInputs(base_grafico_agrupar = "Cargo", base_grafico_selected = ID_FATIA_OUTROS)
+    checar("Pizza: clicar na fatia \"Outros\" não abre janela", is.null(aba_base$detalhe()))
+
     session$setInputs(secao = "envio", envio_grafico_agrupar = "Cargo", envio_grafico_selected = cargo_2)
     checar("Envio > Gráfico: o clique não abre a janela (só na Base de Dados)", is.null(aba_envio$detalhe()))
 })
 invisible(file.remove(file.path(pasta_magistrados("MPRO"), "magistrados.csv")))
+
+# Pizza (Cargo, Sexo, Raça / Cor, Status)
+checar("Pizza: Cargo, Sexo, Raça / Cor e Status (opções existentes de Agrupar por)",
+       identical(AGRUPAMENTOS_PIZZA_MAGISTRADOS, c("Cargo", "Sexo", "Raça / Cor", "Status")) &&
+           all(AGRUPAMENTOS_PIZZA_MAGISTRADOS %in% names(AGRUPAMENTOS_BASE_MAGISTRADOS)))
+fz <- fatias_pizza(tibble(Grupo = c("Masculino", "Feminino", ROTULO_VALOR_VAZIO), Quantidade = c(361, 300, 3), dica = "x"),
+                   cores_fixas_magistrados("Sexo"))
+checar("Pizza: maior fatia primeiro, legenda com quantidade e percentual sem espaços sobrando",
+       identical(as.character(fz$legenda), c("Masculino — 361 (54,4%)", "Feminino — 300 (45,2%)", "(Não informado) — 3 (0,5%)")))
+checar("Pizza: Sexo com as cores do Painel; não informado em cinza",
+       identical(fz$cor, unname(c(PAINEL_CORES_SEXO[["Masculino"]], PAINEL_CORES_SEXO[["Feminino"]], COR_GRAFICO_SEM_INFO))))
+checar("Pizza: percentual dentro só das fatias com 4% ou mais", identical(fz$rotulo_fatia, c("54,4%", "45,2%", "")))
+checar("Pizza: texto da fatia branco no azul e grafite no laranja (contraste)",
+       identical(unname(fz$cor_texto[1:2]), c("#FFFFFF", PALETA_GRAFICOS[["grafite"]])))
+fo <- fatias_pizza(tibble(Grupo = paste("G", 1:12), Quantidade = 12:1, dica = "x"))
+checar("Pizza: mais de 8 grupos → 7 maiores + \"Outros\" (não clicável), soma preservada",
+       nrow(fo) == 8 && fo$id[8] == ID_FATIA_OUTROS && fo$Grupo[8] == "Outros (5)" && sum(fo$Quantidade) == sum(1:12))
+fs <- fatias_pizza(tibble(Grupo = c("Inativo", "Ativo"), Quantidade = c(357, 304), dica = "x"), cores_fixas_magistrados("Status"))
+checar("Pizza: Status Ativo verde e Inativo grafite",
+       identical(fs$cor, unname(PALETA_GRAFICOS[c("grafite", "verde")])))
+ui_mag <- paste(as.character(mod_magistrados_ui("magistrados")), collapse = "")
+checar("Pizza: o seletor \"Exibir\" (maiores grupos) some quando o gráfico é pizza",
+       grepl("data-display-if=\"[&quot;Cargo&quot;,&quot;Sexo&quot;,&quot;Raça / Cor&quot;,&quot;Status&quot;].indexOf(input[&#39;magistrados-base_grafico_agrupar&#39;]) &lt; 0\"", ui_mag, fixed = TRUE))
 
 codigo_app <- paste(readLines(here::here("app.R"), warn = FALSE), collapse = "\n")
 checar("Todas as janelas: script coloca o X (data-bs-dismiss) quando a janela não tem um",

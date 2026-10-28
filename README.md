@@ -77,8 +77,16 @@ O botão **Gerenciar Arquivos** abre uma janela para enviar um ou mais arquivos 
 
 Em **Magistrados → Base de Dados → Gráfico**, clicar numa barra abre uma janela com o resumo (registros e magistrados distintos) e os registros daquele grupo, respeitando os filtros da aba. Isso vale para qualquer opção de **Agrupar por**:
 
-- **Cargo**: CPF, Nome, Órgão de lotação do magistrado(a), Cargo, Situação Profissional e Data de Início da Situação;
+- **Cargo**: CPF, Nome, Órgão de lotação do magistrado(a), Cargo, Situação Profissional, Data de Início e Data de Saída da Situação;
 - **demais opções**: CPF, Nome, Cargo, Situação Profissional, Data de Início e Data de Saída da Situação. A coluna agrupada (Órgão, Forma de promoção, Sexo, Raça / Cor, Naturalidade ou Status) entra logo depois do Nome.
+
+Os agrupamentos **Cargo, Sexo, Raça / Cor e Status** (e o gráfico por cargo da aba Alertas) aparecem em **pizza** (rosca):
+- o total fica no centro e o percentual dentro de cada fatia com 4% ou mais;
+- a legenda mostra categoria, quantidade e percentual, da maior para a menor;
+- acima de 8 categorias, as menores viram "Outros";
+- Sexo e Raça / Cor usam as mesmas cores do Painel; em Status, Ativo é verde e Inativo, grafite.
+
+Os demais agrupamentos continuam em barras.
 
 A opção **Mostrar → Apenas CPFs distintos** deixa uma linha por CPF, com a situação mais recente de cada magistrado. O botão **Gerar arquivo CSV** da janela exporta exatamente o que a tabela mostra: a opção escolhida, a busca e os filtros das colunas.
 
