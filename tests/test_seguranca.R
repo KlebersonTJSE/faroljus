@@ -1889,6 +1889,43 @@ testServer(mod_serventias_server, args = list(empresa = reactive("MPRO"), ativo 
 invisible(file.remove(file.path(pasta_serventias("MPRO"), c("serventias.csv", "alertas_serventias.csv"))))
 
 # =====================================================
+cat("\n[20] Magistrados > Base de Dados > Gráfico: sempre por CPFs distintos\n")
+# =====================================================
+
+# mag_base_ne: JAIR tem 3 registros (cargo 2 em 2018 e 2025, cargo 1 em
+# 2026 — o mais recente); ANA, BRUNO e CARLA, 1 registro de cargo 2 cada.
+checar("CPFs distintos: um índice por CPF, o da situação mais recente (JAIR: 14/09/2026, cargo 1)",
+       identical(indices_cpfs_distintos(mag_base_ne), 3:6))
+dir.create(pasta_magistrados("MPRO"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv2(mag_base_ne, file.path(pasta_magistrados("MPRO"), "magistrados.csv"))
+readr::write_csv2(mag_base_ne, file.path(pasta_magistrados("MPRO"), "magistrados_envio.csv"))
+limpar_cache_arquivos()
+testServer(mod_magistrados_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "base", base_status = "Todos", base_cargo = "Todos", base_situacao = "Todos",
+                      base_orgao = "Todos", base_cpf = "", base_nome = "", base_detalhe = "",
+                      base_grafico_agrupar = "Cargo", base_grafico_qtd = "20")
+    r <- aba_base$grafico_resumo()$resumo
+    checar("Base > Gráfico: cada CPF conta uma vez, pela situação mais recente (4 magistrados: 3 no cargo 2, 1 no cargo 1)",
+           sum(r$Quantidade) == 4 &&
+               r$Quantidade[r$Grupo == CARGO_MAGISTRADO[["2"]]] == 3 && r$Quantidade[r$Grupo == CARGO_MAGISTRADO[["1"]]] == 1)
+    session$setInputs(base_grafico_agrupar = "Status")
+    r <- aba_base$grafico_resumo()$resumo
+    checar("Base > Gráfico: vale para todos os agrupamentos (Status: JAIR conta uma vez, como Ativo)",
+           sum(r$Quantidade) == 4 && r$Quantidade[r$Grupo == "Ativo"] == 2)
+    checar("Base > Tabela continua com todos os registros", nrow(aba_base$filtrados()) == 6)
+    session$setInputs(base_grafico_agrupar = "Cargo", base_grafico_selected = CARGO_MAGISTRADO[["2"]])
+    checar("Base > janela do clique mantém a regra (todos os registros do cargo, 5)", nrow(aba_base$detalhe()$tabela) == 5)
+    session$setInputs(secao = "envio", envio_status = "Todos", envio_cargo = "Todos", envio_situacao = "Todos",
+                      envio_orgao = "Todos", envio_cpf = "", envio_nome = "", envio_detalhe = "",
+                      envio_grafico_agrupar = "Cargo", envio_grafico_qtd = "20")
+    checar("Envio > Gráfico mantém a contagem de registros (6)", sum(aba_envio$grafico_resumo()$resumo$Quantidade) == 6)
+})
+invisible(file.remove(file.path(pasta_magistrados("MPRO"), c("magistrados.csv", "magistrados_envio.csv"))))
+gp_m <- grafico_automatico_gg(tibble(Grupo = c("A", "B"), Quantidade = c(3, 1), dica = "x"), "t", unidade = c("magistrado", "magistrados"))
+checar("Pizza por CPFs distintos: centro mostra magistrados, não registros",
+       any(vapply(gp_m$grafico$layers, function(l) isTRUE(grepl("magistrados", l$aes_params$label)), logical(1))))
+
+# =====================================================
 
 cat(sprintf("\n%d de %d verificações passaram.\n", total - falhas, total))
 if (falhas > 0) quit(status = 1)

@@ -1085,7 +1085,8 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
                                               msg_sem_dados, nome_csv,
                                               mapa_orgaos = reactive(character(0)),
                                               extra_csv = NULL,
-                                              detalhe_grafico = FALSE) {
+                                              detalhe_grafico = FALSE,
+                                              grafico_cpfs_distintos = FALSE) {
     
     ns <- session$ns
     id <- function(x) paste0(p, "_", x)
@@ -1221,7 +1222,9 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
             titulo_pessoas = "Magistrados",
             nome_csv = nome_csv,
             detalhe = detalhe_grafico,
-            msg_sem_resultado = MSG_SEM_RESULTADO
+            msg_sem_resultado = MSG_SEM_RESULTADO,
+            cpfs_distintos = grafico_cpfs_distintos,
+            unidade_pessoas = c("magistrado", "magistrados")
         )
     )
     
@@ -1259,6 +1262,7 @@ servidor_aba_cadastro_magistrados <- function(input, output, session, p, dados,
         filtrados = filtrados,
         atualizar_combos = atualizar_combos,
         msg_sem_dados = msg_sem_dados,
+        grafico_resumo = grafico$resumo,
         detalhe = grafico$detalhe,
         detalhe_tabela = grafico$detalhe_tabela,
         detalhe_linhas_csv = grafico$detalhe_linhas_csv
@@ -1660,7 +1664,11 @@ mod_magistrados_server <- function(id, ativo = reactive(TRUE), empresa = reactiv
             ),
             nome_csv = "base-magistrados",
             mapa_orgaos = nomes_orgaos,
-            detalhe_grafico = TRUE
+            detalhe_grafico = TRUE,
+            # Só o gráfico da Base de Dados conta CPFs distintos (cada
+            # magistrado uma vez, pela situação mais recente); a tabela,
+            # a janela de detalhe, o CSV e as demais abas não mudam.
+            grafico_cpfs_distintos = TRUE
         )
         
         aba_envio <- servidor_aba_cadastro_magistrados(

@@ -821,7 +821,8 @@ tema_grafico <- function() {
     )
 }
 
-grafico_pizza_gg <- function(d, titulo, subtitulo, interativo = TRUE, legenda = "right") {
+grafico_pizza_gg <- function(d, titulo, subtitulo, interativo = TRUE, legenda = "right",
+                             unidade = c("registro", "registros")) {
 
   d <- d %>%
     mutate(
@@ -844,7 +845,7 @@ grafico_pizza_gg <- function(d, titulo, subtitulo, interativo = TRUE, legenda = 
     ) +
     annotate(
       "text", x = 0.5, y = 0,
-      label = sprintf("%s\n%s", fmt_qtd_grafico(total), if (total == 1) "registro" else "registros"),
+      label = sprintf("%s\n%s", fmt_qtd_grafico(total), if (total == 1) unidade[1] else unidade[2]),
       size = 5.2, fontface = "bold", color = PALETA_GRAFICOS[["grafite"]], lineheight = 0.95
     ) +
     coord_polar(theta = "y", direction = -1) +
@@ -929,7 +930,8 @@ grafico_barras_h_gg <- function(d, titulo, subtitulo, interativo = TRUE) {
 # ("clique numa fatia/barra..."), conforme o tipo.
 grafico_automatico_gg <- function(resumo, titulo, subtitulo = NULL, cores_fixas = NULL,
                                   total_geral = NULL, interativo = TRUE, clicavel = FALSE,
-                                  legenda = "right", largura = 9, permite_pizza = TRUE) {
+                                  legenda = "right", largura = 9, permite_pizza = TRUE,
+                                  unidade = c("registro", "registros")) {
 
   n <- nrow(resumo)
   tipo <- tipo_grafico_automatico(n)
@@ -945,7 +947,7 @@ grafico_automatico_gg <- function(resumo, titulo, subtitulo = NULL, cores_fixas 
   }
 
   if (tipo == "pizza") {
-    g <- grafico_pizza_gg(d, titulo, subtitulo, interativo, legenda)
+    g <- grafico_pizza_gg(d, titulo, subtitulo, interativo, legenda, unidade)
     linhas_legenda <- sum(str_count(str_wrap(sprintf("%s — %s (%s)", d$Rotulo, d$qtd_txt, d$pct_txt), 46), "\n") + 1)
     altura <- if (legenda == "right") max(4.6, 0.3 * linhas_legenda + 1.6) else 6.4
   } else if (tipo == "colunas") {
@@ -963,11 +965,12 @@ grafico_automatico_gg <- function(resumo, titulo, subtitulo = NULL, cores_fixas 
 }
 
 grafico_automatico_girafe <- function(resumo, titulo, subtitulo = NULL, selecionavel = FALSE,
-                                      cores_fixas = NULL, total_geral = NULL, permite_pizza = TRUE) {
+                                      cores_fixas = NULL, total_geral = NULL, permite_pizza = TRUE,
+                                      unidade = c("registro", "registros")) {
 
   g <- grafico_automatico_gg(
     resumo, titulo, subtitulo, cores_fixas, total_geral,
-    interativo = TRUE, clicavel = selecionavel, permite_pizza = permite_pizza
+    interativo = TRUE, clicavel = selecionavel, permite_pizza = permite_pizza, unidade = unidade
   )
 
   girafe(
@@ -1057,6 +1060,27 @@ colunas_detalhe_grafico <- function(df, agrupamentos, agrupar, colunas_padrao,
 
 }
 
+# Índices das linhas de `df` com um registro por CPF: o de data de
+# início da situação mais recente (regra de ultimo_registro_por_cpf():
+# empate, o último no arquivo; registro sem data só vale se o CPF não
+# tiver nenhum datado). CPF com e sem zero à esquerda é o mesmo
+# (chave_cpf()); linhas sem CPF ficam todas. Sem coluna CPF: todas.
+indices_cpfs_distintos <- function(df) {
+  col_cpf <- coluna_por_regex(df, REGEX_COL_CPF)
+  if (is.null(col_cpf) || nrow(df) == 0) {
+    return(seq_len(nrow(df)))
+  }
+  col_inicio <- coluna_por_regex(df, REGEX_COL_INICIO_SITUACAO)
+  chave <- chave_cpf(df[[col_cpf]])
+  inicio <- if (is.null(col_inicio)) as.Date(rep(NA, nrow(df))) else converter_data(df[[col_inicio]])
+  ordem <- seq_len(nrow(df))
+  # Dentro de cada CPF: sem data primeiro, depois por data e ordem no
+  # arquivo — o último de cada grupo é o que fica.
+  idx <- order(chave, !is.na(inicio), inicio, ordem, na.last = FALSE)
+  ultimo <- !duplicated(chave[idx], fromLast = TRUE) | chave[idx] == ""
+  sort(idx[ultimo])
+}
+
 # Registros do grupo `grupo` (valor da barra/fatia clicada) em `df`
 # (dados de exibição, já filtrados). Datas em dd/mm/aaaa; ordem por nome.
 detalhe_grafico_registros <- function(df, agrupamentos, agrupar, grupo, colunas_padrao,
@@ -1073,18 +1097,8 @@ detalhe_grafico_registros <- function(df, agrupamentos, agrupar, grupo, colunas_
 
   sel <- df[grupos == grupo, , drop = FALSE]
 
-  col_cpf <- coluna_por_regex(sel, REGEX_COL_CPF)
-  col_inicio <- coluna_por_regex(sel, REGEX_COL_INICIO_SITUACAO)
-
-  if (isTRUE(cpfs_distintos) && !is.null(col_cpf) && nrow(sel) > 0) {
-    chave <- chave_cpf(sel[[col_cpf]])
-    inicio <- if (is.null(col_inicio)) as.Date(rep(NA, nrow(sel))) else converter_data(sel[[col_inicio]])
-    ordem <- seq_len(nrow(sel))
-    # Dentro de cada CPF: sem data primeiro, depois por data e ordem no
-    # arquivo — o último de cada grupo é o que fica.
-    idx <- order(chave, !is.na(inicio), inicio, ordem, na.last = FALSE)
-    ultimo <- !duplicated(chave[idx], fromLast = TRUE) | chave[idx] == ""
-    sel <- sel[sort(idx[ultimo]), , drop = FALSE]
+  if (isTRUE(cpfs_distintos)) {
+    sel <- sel[indices_cpfs_distintos(sel), , drop = FALSE]
   }
 
   especificacao <- colunas_detalhe_grafico(df, agrupamentos, agrupar, colunas_padrao, colunas_por_agrupamento)
@@ -1168,7 +1182,10 @@ ui_grafico_agrupado <- function(id, agrupamentos, agrupar_padrao = "Cargo", id_g
 #   detalhe_registros = function(df, agrupar, grupo, cpfs_distintos),
 #   icones (nome = agrupamento), pessoas ("magistrado(s)"/"pessoa(s)"),
 #   titulo_pessoas ("Magistrados"/"Pessoas"), nome_csv, detalhe (lógico),
-#   msg_sem_resultado.
+#   msg_sem_resultado; opcionais cpfs_distintos (lógico: o gráfico conta
+#   cada CPF uma vez, pela situação mais recente — só o gráfico; tabela,
+#   janela e CSV não mudam) e unidade_pessoas (centro da pizza, ex.:
+#   c("magistrado", "magistrados")).
 # Devolve list(detalhe, detalhe_tabela, detalhe_linhas_csv).
 servidor_grafico_agrupado <- function(input, output, session, p, dados, filtrados, cfg) {
 
@@ -1186,6 +1203,13 @@ servidor_grafico_agrupado <- function(input, output, session, p, dados, filtrado
 
     if (nrow(df) == 0) {
       return(list(resumo = NULL, mensagem = cfg$msg_sem_resultado))
+    }
+
+    # Gráfico por CPFs distintos (Magistrados > Base de Dados): só para
+    # o gráfico, cada CPF entra uma vez, pelo registro da situação mais
+    # recente — as fatias/barras somam o número de pessoas.
+    if (isTRUE(cfg$cpfs_distintos)) {
+      df <- df[indices_cpfs_distintos(df), , drop = FALSE]
     }
 
     agrupar <- valor("grafico_agrupar") %||% "Cargo"
@@ -1226,28 +1250,41 @@ servidor_grafico_agrupado <- function(input, output, session, p, dados, filtrado
     total <- nrow(r$resumo)
     clicavel <- clique_ativo()
 
+    distintos <- isTRUE(cfg$cpfs_distintos)
+    aviso_clique <- if (clicavel) sprintf("<br/><i>Clique para ver os %s</i>", tolower(cfg$titulo_pessoas)) else ""
+
     grupos <- r$resumo %>%
       mutate(
-        dica = sprintf(
-          "<b>%s</b><br/>%s registro(s)<br/>%s %s (CPF distintos)%s",
-          htmltools::htmlEscape(Grupo), fmt(Quantidade), fmt(Pessoas), cfg$pessoas,
-          if (clicavel) sprintf("<br/><i>Clique para ver os %s</i>", tolower(cfg$titulo_pessoas)) else ""
-        )
+        dica = if (distintos) {
+          sprintf(
+            "<b>%s</b><br/>%s %s (CPF distintos, situação mais recente)%s",
+            htmltools::htmlEscape(Grupo), fmt(Quantidade), cfg$pessoas, aviso_clique
+          )
+        } else {
+          sprintf(
+            "<b>%s</b><br/>%s registro(s)<br/>%s %s (CPF distintos)%s",
+            htmltools::htmlEscape(Grupo), fmt(Quantidade), fmt(Pessoas), cfg$pessoas, aviso_clique
+          )
+        }
       )
 
     limite <- suppressWarnings(as.integer(valor("grafico_qtd")))
     exibido <- if (!is.na(limite) && limite > 0) head(grupos, limite) else grupos
 
     # Tipo automático pela quantidade de grupos exibidos; percentuais
-    # sobre o total de registros (mesmo quando só parte dos grupos é
-    # exibida).
+    # sobre o total (de registros ou, por CPFs distintos, de pessoas),
+    # mesmo quando só parte dos grupos é exibida.
     grafico_automatico_girafe(
       exibido,
-      titulo = sprintf("Registros por %s", r$agrupar),
-      subtitulo = sprintf("Exibindo %d de %d grupo(s)", nrow(exibido), total),
+      titulo = sprintf("%s por %s", if (distintos) cfg$titulo_pessoas else "Registros", r$agrupar),
+      subtitulo = paste0(
+        sprintf("Exibindo %d de %d grupo(s)", nrow(exibido), total),
+        if (distintos) " · cada CPF uma vez (situação mais recente)" else ""
+      ),
       selecionavel = clicavel,
       cores_fixas = cfg$cores_fixas(r$agrupar),
-      total_geral = sum(r$resumo$Quantidade)
+      total_geral = sum(r$resumo$Quantidade),
+      unidade = if (distintos) cfg$unidade_pessoas else c("registro", "registros")
     )
   })
 
@@ -1392,6 +1429,7 @@ servidor_grafico_agrupado <- function(input, output, session, p, dados, filtrado
   )
 
   list(
+    resumo = resumo,
     detalhe = detalhe_atual,
     detalhe_tabela = detalhe_tabela_exibida,
     detalhe_linhas_csv = detalhe_linhas_csv
