@@ -82,7 +82,7 @@ Em **Magistrados → Base de Dados → Gráfico**, clicar numa barra abre uma ja
 
 Em **Magistrados → Base de Dados → Gráfico**, os agrupamentos contam **CPFs distintos**: cada magistrado entra uma vez, pelo registro da situação mais recente (a mesma regra da opção "Apenas CPFs distintos"). Assim, as fatias e barras somam o número de magistrados, e o centro da pizza mostra "magistrados". Isso vale só para o gráfico. A tabela, a janela aberta pelo clique, os CSVs, a aba Envio e as demais abas continuam por registro.
 
-**Pessoal e Auxiliar → Gráfico** tem o mesmo comportamento, com o mesmo código (`servidor_grafico_agrupado()`). Na janela de Cargo, a coluna de órgão é a "Órgão de lotação do(a) servidor(a)".
+**Pessoal e Auxiliar → Gráfico** tem o mesmo comportamento, com o mesmo código (`servidor_grafico_agrupado()`), inclusive a contagem por CPFs distintos no gráfico da Base de Dados: cada pessoa entra uma vez, e o centro da pizza mostra "pessoas". Na janela de Cargo, a coluna de órgão é a "Órgão de lotação do(a) servidor(a)".
 
 ### 🏛️ Serventias: CSV a partir da Base de Dados
 

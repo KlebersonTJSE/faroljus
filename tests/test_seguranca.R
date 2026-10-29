@@ -1926,6 +1926,37 @@ checar("Pizza por CPFs distintos: centro mostra magistrados, não registros",
        any(vapply(gp_m$grafico$layers, function(l) isTRUE(grepl("magistrados", l$aes_params$label)), logical(1))))
 
 # =====================================================
+cat("\n[21] Pessoal e Auxiliar > Base de Dados > Gráfico: sempre por CPFs distintos\n")
+# =====================================================
+
+# srv_base_g: ANA tem 2 registros (CPF com e sem zero; o mais recente é
+# de 2024, cargo 1, Ativo); BRUNO, CARLA e DIEGO, 1 cada.
+dir.create(pasta_pessoal("MPRO"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv2(srv_base_g, file.path(pasta_pessoal("MPRO"), "pessoal_auxiliar.csv"))
+readr::write_csv2(srv_base_g, file.path(pasta_pessoal("MPRO"), "pessoal_auxiliar_envio.csv"))
+limpar_cache_arquivos()
+testServer(mod_pessoal_auxiliar_server, args = list(empresa = reactive("MPRO"), ativo = reactive(TRUE)), {
+    session$setInputs(secao = "base", base_status = "Todos", base_cargo = "Todos", base_situacao = "Todos",
+                      base_orgao = "Todos", base_cpf = "", base_nome = "", base_detalhe = "",
+                      base_grafico_agrupar = "Cargo", base_grafico_qtd = "20")
+    r <- aba_base$grafico_resumo()$resumo
+    checar("Pessoal > Base > Gráfico: cada CPF conta uma vez (4 pessoas; efetivo: ANA e CARLA)",
+           sum(r$Quantidade) == 4 && r$Quantidade[r$Grupo == CARGO_SERVIDOR[["1"]]] == 2)
+    session$setInputs(base_grafico_agrupar = "Status")
+    r <- aba_base$grafico_resumo()$resumo
+    checar("Pessoal > Base > Gráfico: vale para todos os agrupamentos (Status: ANA conta só como Ativo)",
+           sum(r$Quantidade) == 4 && !("Inativo" %in% r$Grupo))
+    checar("Pessoal > Base > Tabela continua com todos os registros", nrow(aba_base$filtrados()) == 5)
+    session$setInputs(base_grafico_agrupar = "Cargo", base_grafico_selected = CARGO_SERVIDOR[["1"]])
+    checar("Pessoal > janela do clique mantém a regra (todos os registros do cargo, 3)", nrow(aba_base$detalhe()$tabela) == 3)
+    session$setInputs(secao = "envio", envio_status = "Todos", envio_cargo = "Todos", envio_situacao = "Todos",
+                      envio_orgao = "Todos", envio_cpf = "", envio_nome = "", envio_detalhe = "",
+                      envio_grafico_agrupar = "Cargo", envio_grafico_qtd = "20")
+    checar("Pessoal > Envio > Gráfico mantém a contagem de registros (5)", sum(aba_envio$grafico_resumo()$resumo$Quantidade) == 5)
+})
+invisible(file.remove(file.path(pasta_pessoal("MPRO"), c("pessoal_auxiliar.csv", "pessoal_auxiliar_envio.csv"))))
+
+# =====================================================
 
 cat(sprintf("\n%d de %d verificações passaram.\n", total - falhas, total))
 if (falhas > 0) quit(status = 1)
