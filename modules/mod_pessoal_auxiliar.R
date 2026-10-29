@@ -3169,7 +3169,8 @@ FILTROS_TEXTO_INC_SERVIDORES <- c("CPF" = "CPF", "Nome" = "Nome")
 
 servidor_aba_cadastro_pessoal <- function(input, output, session, p, dados, mapa_orgaos,
                                           msg_sem_dados, nome_csv, extra_csv = NULL,
-                                          detalhe_grafico = FALSE) {
+                                          detalhe_grafico = FALSE,
+                                          grafico_cpfs_distintos = FALSE) {
 
   ns <- session$ns
   id <- function(x) paste0(p, "_", x)
@@ -3323,7 +3324,9 @@ servidor_aba_cadastro_pessoal <- function(input, output, session, p, dados, mapa
       titulo_pessoas = "Pessoas",
       nome_csv = nome_csv,
       detalhe = detalhe_grafico,
-      msg_sem_resultado = MSG_SEM_RESULTADO
+      msg_sem_resultado = MSG_SEM_RESULTADO,
+      cpfs_distintos = grafico_cpfs_distintos,
+      unidade_pessoas = c("pessoa", "pessoas")
     )
   )
 
@@ -3357,7 +3360,7 @@ servidor_aba_cadastro_pessoal <- function(input, output, session, p, dados, mapa
   )
 
   list(exibicao = exibicao, filtrados = filtrados, atualizar_combos = atualizar_combos,
-       msg_sem_dados = msg_sem_dados, detalhe = grafico$detalhe,
+       msg_sem_dados = msg_sem_dados, grafico_resumo = grafico$resumo, detalhe = grafico$detalhe,
        detalhe_tabela = grafico$detalhe_tabela, detalhe_linhas_csv = grafico$detalhe_linhas_csv)
 
 }
@@ -3469,7 +3472,11 @@ mod_pessoal_auxiliar_server <- function(id, ativo = reactive(TRUE), empresa = re
         " para processamento. Utilize o botão \"Gerenciar Arquivos\" para enviá-lo."
       ),
       nome_csv = "base-pessoal-auxiliar",
-      detalhe_grafico = TRUE
+      detalhe_grafico = TRUE,
+      # Mesma regra de Magistrados: só o gráfico da Base de Dados conta
+      # CPFs distintos (cada pessoa uma vez, pela situação mais recente);
+      # a tabela, a janela de detalhe, o CSV e as demais abas não mudam.
+      grafico_cpfs_distintos = TRUE
     )
 
     aba_envio <- servidor_aba_cadastro_pessoal(
